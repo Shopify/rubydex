@@ -18,6 +18,7 @@ module Rubydex
         @graph = graph
         @config = config
         @rules = rules.select { |rule| config.rule_enabled?(rule) }.sort_by { |rule| rule.name.to_s }
+        @dependency_paths = Gem.path #: Array[String]
       end
 
       #: () -> Result
@@ -25,7 +26,7 @@ module Rubydex
         rule_diagnostics = @rules.flat_map do |rule_class|
           rule = rule_class.new(@graph, config: @config)
           rule.lint
-          rule.diagnostics
+          filter_diagnostics(rule.diagnostics, @config.excludes_for(rule_class))
         end
 
         diagnostics = (@graph.diagnostics + rule_diagnostics).select do |diagnostic|
@@ -48,9 +49,33 @@ module Rubydex
 
       private
 
+      #: (Array[Diagnostic], Array[String]) -> Array[Diagnostic]
+      def filter_diagnostics(diagnostics, exclude_patterns)
+        diagnostics.reject do |diagnostic|
+          location_excluded?(diagnostic.location, exclude_patterns)
+        end
+      end
+
+      #: (Location, Array[String]) -> bool
+      def location_excluded?(location, patterns)
+        path = location.to_file_path
+        return true if @dependency_paths.any? do |dependency_path|
+          path == dependency_path || path.start_with?("#{dependency_path}/")
+        end
+
+        Helpers::PathHelpers.path_matches_patterns?(
+          path,
+          patterns,
+          workspace: @graph.workspace_path,
+          flags: Helpers::PathHelpers::RUBOCOP_EXCLUDE_FNMATCH_FLAGS,
+        )
+      rescue Location::NotFileUriError
+        false
+      end
+
       #: (Diagnostic) -> bool
       def diagnostic_in_workspace?(diagnostic)
-        path = URI::RFC2396_PARSER.unescape(diagnostic.location.to_file_path)
+        path = diagnostic.location.to_file_path
         workspace_path = Pathname.new(File.expand_path(@graph.workspace_path))
         relative_path = Pathname.new(File.expand_path(path)).relative_path_from(workspace_path)
 

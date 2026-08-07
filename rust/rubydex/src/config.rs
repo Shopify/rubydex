@@ -1,4 +1,5 @@
 use crate::assert_mem_size;
+use crate::diagnostic::Severity;
 use crate::errors::Errors;
 use crate::path_helpers;
 use std::collections::HashSet;
@@ -72,6 +73,8 @@ impl GraphSettings {
 pub struct Rule {
     name: Box<str>,
     enabled: bool,
+    exclude_patterns: Box<[Box<str>]>,
+    severity: Option<Severity>,
 }
 
 impl Rule {
@@ -83,6 +86,16 @@ impl Rule {
     #[must_use]
     pub fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    #[must_use]
+    pub fn exclude_patterns(&self) -> &[Box<str>] {
+        &self.exclude_patterns
+    }
+
+    #[must_use]
+    pub fn severity(&self) -> Option<&Severity> {
+        self.severity.as_ref()
     }
 
     /// Parses a single `[linter.rules.{name}]` table
@@ -98,7 +111,24 @@ impl Rule {
                     "invalid `linter.rules.{name}.enabled` setting: expected a boolean"
                 ));
             }
-            None => return Err(format!("missing `linter.rules.{name}.enabled` setting")),
+            None => true,
+        };
+
+        let exclude_patterns = match table.remove("exclude") {
+            Some(value) => value
+                .try_into::<Vec<Box<str>>>()
+                .map_err(|error| format!("invalid `linter.rules.{name}.exclude` setting: {error}"))?
+                .into_boxed_slice(),
+            None => Box::default(),
+        };
+
+        let severity = match table.remove("severity") {
+            Some(value) => Some(
+                value
+                    .try_into::<Severity>()
+                    .map_err(|error| format!("invalid `linter.rules.{name}.severity` setting: {error}"))?,
+            ),
+            None => None,
         };
 
         if let Some(key) = table.keys().next() {
@@ -108,6 +138,8 @@ impl Rule {
         Ok(Self {
             name: Box::from(name),
             enabled,
+            exclude_patterns,
+            severity,
         })
     }
 }
@@ -385,17 +417,24 @@ mod tests {
 
     #[test]
     fn parse_parses_every_linter_rule() {
-        let config = parse("[linter.rules.Something]\nenabled = true\n\n[linter.rules.Other]\nenabled = false\n")
-            .expect("expected the config to parse");
+        let config = parse(
+            "[linter.rules.Something]\nseverity = \"warning\"\nexclude = [\"components/legacy/**\"]\n\n\
+             [linter.rules.Other]\nenabled = false\n",
+        )
+        .expect("expected the config to parse");
 
         let rules = config.linter().rules();
         assert_eq!(rules.len(), 2);
 
         let something = rules.iter().find(|rule| rule.name() == "Something").unwrap();
         assert!(something.enabled());
+        assert_eq!(something.exclude_patterns(), [Box::from("components/legacy/**")]);
+        assert_eq!(something.severity(), Some(&Severity::Warning));
 
         let other = rules.iter().find(|rule| rule.name() == "Other").unwrap();
         assert!(!other.enabled());
+        assert!(other.exclude_patterns().is_empty());
+        assert_eq!(other.severity(), None);
     }
 
     #[test]
@@ -444,14 +483,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_a_rule_without_enabled() {
-        let error =
-            parse("[linter.rules.Something]\n").expect_err("a rule setting must state whether the rule is enabled");
-
-        assert!(
-            error.contains("missing `linter.rules.Something.enabled` setting"),
-            "unexpected error: {error}"
-        );
+    fn parse_defaults_a_rule_to_enabled() {
+        let config = parse("[linter.rules.Something]\n").expect("enabled defaults to true");
+        assert!(config.linter().rules()[0].enabled());
     }
 
     #[test]
@@ -466,13 +500,52 @@ mod tests {
 
     #[test]
     fn parse_rejects_an_unknown_rule_setting() {
-        let error = parse("[linter.rules.Something]\nenabled = true\nseverity = \"error\"\n")
-            .expect_err("rules only accept the enabled setting");
+        let error =
+            parse("[linter.rules.Something]\nparallel = true\n").expect_err("unknown rule settings must be rejected");
 
         assert!(
-            error.contains("unknown setting `linter.rules.Something.severity`"),
+            error.contains("unknown setting `linter.rules.Something.parallel`"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn parse_rejects_an_invalid_rule_exclude_setting() {
+        let error = parse("[linter.rules.Something]\nexclude = \"components/legacy/**\"\n")
+            .expect_err("exclude must be an array of strings");
+
+        assert!(
+            error.contains("invalid `linter.rules.Something.exclude` setting"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_an_invalid_rule_severity_setting() {
+        for severity in ["\"critical\"", "1"] {
+            let error = parse(&format!("[linter.rules.Something]\nseverity = {severity}\n"))
+                .expect_err("severity must be one of the supported strings");
+
+            assert!(
+                error.contains("invalid `linter.rules.Something.severity` setting"),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_accepts_every_rule_severity() {
+        for (value, expected) in [
+            ("error", Severity::Error),
+            ("warning", Severity::Warning),
+            ("information", Severity::Information),
+            ("hint", Severity::Hint),
+        ] {
+            let config =
+                parse(&format!("[linter.rules.Something]\nseverity = \"{value}\"\n")).expect("severity should parse");
+
+            assert_eq!(config.linter().rules()[0].severity(), Some(&expected));
+        }
     }
 
     #[test]

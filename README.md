@@ -110,7 +110,11 @@ Thread safety comes from an `RwLock` on the Rust side, **not** from Ruby's
   aliasing the Rust allocation (which would double-free on GC) or ballooning
   memory with a deep copy.
 
-## Querying with Cypher
+## Tools
+
+All built-in tools are experimental. These tools can change without deprecation warnings.
+
+### `rdx query`
 
 Rubydex exposes the indexed graph through a read-only subset of the
 [Cypher](https://opencypher.org/) query language. Only read clauses (`MATCH`,
@@ -145,12 +149,32 @@ puts query.render(graph, "json")
 puts Rubydex::Query.schema("table")
 ```
 
-## MCP Server (Experimental)
+### `rdx lint`
+
+Put rule files under `rubydex_linter/rules`. Each rule must inherit from `Rubydex::Linter::Rule`.
+
+Run the linter:
+
+```bash
+bundle exec rdx lint [PATH]
+```
+
+If you omit `PATH`, Rubydex uses the current directory.
+
+Configure a rule in `rubydex.toml`:
+
+```toml
+[linter.rules.<Rule name>]
+enabled = true
+exclude = ["path_to_skip/**"]
+```
+
+### `rdx mcp`
 
 Rubydex can run as an MCP (Model Context Protocol) server, enabling AI assistants
 like Claude to semantically query your Ruby codebase.
 
-### Setup
+#### Setup
 
 1. Add Rubydex to the Ruby project you want to index:
    ```ruby
@@ -178,7 +202,7 @@ like Claude to semantically query your Ruby codebase.
    the project at startup and provides semantic code intelligence tools through
    the tools below.
 
-### Available MCP Tools
+#### Available MCP Tools
 
 | Tool | Description |
 |------|-------------|

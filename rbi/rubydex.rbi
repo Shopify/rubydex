@@ -357,6 +357,70 @@ class Rubydex::Diagnostic
 end
 
 module Rubydex::Linter; end
+module Rubydex::Linter::Helpers; end
+
+module Rubydex::Linter::Helpers::PathHelpers
+  extend T::Helpers
+
+  requires_ancestor { Rubydex::Linter::Rule }
+
+  RUBOCOP_EXCLUDE_FNMATCH_FLAGS = T.let(T.unsafe(nil), Integer)
+  TEST_PATHS = T.let(T.unsafe(nil), T::Array[String])
+
+  sig do
+    params(
+      path: String,
+      patterns: T::Array[String],
+      workspace: String,
+      flags: Integer,
+    ).returns(T::Boolean)
+  end
+  def self.path_matches_patterns?(path, patterns, workspace:, flags: 0); end
+
+  sig { params(location: Rubydex::Location, workspace: String).returns(String) }
+  def self.display_path(location, workspace:); end
+
+  sig do
+    params(
+      definitions: T::Enumerable[Rubydex::Definition],
+      excluded_patterns: T::Array[String],
+    ).returns(T::Array[Rubydex::Definition])
+  end
+  def reject_definitions_in_paths(definitions, excluded_patterns); end
+
+  sig do
+    params(
+      definitions: T::Enumerable[Rubydex::Definition],
+      patterns: T::Array[String],
+    ).returns(T::Array[Rubydex::Definition])
+  end
+  def select_definitions_in_paths(definitions, patterns); end
+
+  private
+
+  sig { params(path: String, patterns: T::Array[String]).returns(T::Boolean) }
+  def path_matches_patterns?(path, patterns); end
+
+  sig { params(path: String).returns(T::Boolean) }
+  def test_path?(path); end
+
+  sig { params(definition: Rubydex::Definition).returns(T.nilable(String)) }
+  def path_for_definition(definition); end
+
+end
+
+module Rubydex::Linter::Helpers::SourceAccessHelpers
+  sig { params(uri: String).returns(Rubydex::Location) }
+  def file_location(uri); end
+
+  sig { params(uri: String).returns(String) }
+  def path_for_uri(uri); end
+
+  private
+
+  sig { params(location: Rubydex::Location).returns(T.nilable(String)) }
+  def source_for_location(location); end
+end
 
 class Rubydex::Linter::Rule
   abstract!
@@ -376,8 +440,31 @@ class Rubydex::Linter::Rule
   sig { returns(T::Array[Rubydex::Diagnostic]) }
   def diagnostics; end
 
+  sig { params(definition: Rubydex::Definition).returns(Rubydex::Location) }
+  def diagnostic_location(definition); end
+
+  sig { params(base_name: String).returns(T::Enumerable[Rubydex::Class]) }
+  def child_classes(base_name); end
+
+  sig { params(name: String).returns(Rubydex::Namespace) }
+  def required_namespace(name); end
+
+  sig do
+    params(
+      namespace: Rubydex::Namespace,
+      method_name: String,
+    ).returns(Rubydex::Method)
+  end
+  def required_method(namespace, method_name); end
+
+  sig { returns(String) }
+  def rule_name; end
+
   sig { abstract.returns(T.class_of(Rubydex::Severity::Base)) }
   def severity; end
+
+  sig { returns(T.class_of(Rubydex::Severity::Base)) }
+  def verified_severity; end
 
   sig { abstract.void }
   def lint; end
@@ -392,6 +479,21 @@ class Rubydex::Linter::Rule
     ).void
   end
   def add_diagnostic(message, location, related_information: []); end
+
+end
+
+class Rubydex::Linter::MissingGraphDependencyError < StandardError
+  sig { params(rule_name: String, dependency: String).void }
+  def initialize(rule_name, dependency); end
+end
+
+class Rubydex::Linter::RuleLoadError < StandardError; end
+
+class Rubydex::Linter::RuleLoader
+  RULE_GLOB = T.let(T.unsafe(nil), String)
+
+  sig { params(workspace_path: String).returns(T::Array[T.class_of(Rubydex::Linter::Rule)]) }
+  def self.load(workspace_path); end
 end
 
 class Rubydex::Linter::Runner
@@ -496,6 +598,17 @@ class Rubydex::LinterConfig
 
   sig { params(rule_class: T.class_of(Rubydex::Linter::Rule)).returns(T::Boolean) }
   def rule_enabled?(rule_class); end
+
+  sig { params(rule_class: T.class_of(Rubydex::Linter::Rule)).returns(T::Array[String]) }
+  def excludes_for(rule_class); end
+
+  sig do
+    params(
+      rule_class: T.class_of(Rubydex::Linter::Rule),
+      default: T.class_of(Rubydex::Severity::Base),
+    ).returns(T.class_of(Rubydex::Severity::Base))
+  end
+  def severity_for(rule_class, default:); end
 end
 
 # The settings of a single linter rule, read from a `[linter.rules.RuleName]` table.
@@ -503,8 +616,21 @@ class Rubydex::RuleConfig
   sig { returns(String) }
   attr_reader :name
 
-  sig { params(name: String, enabled: T::Boolean).void }
-  def initialize(name, enabled); end
+  sig { returns(T::Array[String]) }
+  attr_reader :exclude_patterns
+
+  sig { returns(T.nilable(T.class_of(Rubydex::Severity::Base))) }
+  attr_reader :severity
+
+  sig do
+    params(
+      name: String,
+      enabled: T::Boolean,
+      exclude_patterns: T::Array[String],
+      severity: T.nilable(T.class_of(Rubydex::Severity::Base)),
+    ).void
+  end
+  def initialize(name, enabled, exclude_patterns = [], severity = nil); end
 
   sig { returns(T::Boolean) }
   def enabled?; end

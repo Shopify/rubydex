@@ -7,8 +7,6 @@ module Rubydex
     # `rdx lint [PATH]` — discovers project and dependency rules and runs them against a workspace.
     class Command
       class Lint < Command
-        RULE_GLOB = "rubydex_linter/rules/**/*.rb" #: String
-
         command "lint"
         arguments "[PATH]"
         summary "Run semantic lint rules against a workspace"
@@ -32,7 +30,12 @@ module Rubydex
 
           graph = build_graph($stderr, workspace_path:, config:, fail_on_index_errors: true)
           result = Rubydex::Linter::Runner.new(graph, rules:, config: config.linter).run
-          result.diagnostics.each { |diagnostic| puts(format_linter_diagnostic(diagnostic)) }
+          if result.diagnostics.empty?
+            print_summary(graph.documents.count, result.diagnostics)
+            return
+          end
+
+          print_offenses(result.diagnostics, graph)
           exit(1) unless result.success?
         end
 
@@ -51,47 +54,101 @@ module Rubydex
           )
         end
 
-        #: (String workspace_path) -> Array[singleton(Linter::Rule)]
+        #: (String workspace_path) -> Array[singleton(Rubydex::Linter::Rule)]
         def load_linter_rules(workspace_path)
-          existing_rules = Rubydex::Linter::Rule.subclasses
-          rule_files = Dir.glob(RULE_GLOB, base: workspace_path).map do |rule_file|
-            File.expand_path(rule_file, workspace_path)
-          end
-          if ENV["BUNDLE_GEMFILE"]
-            rule_files.concat(Gem.find_latest_files(RULE_GLOB))
-          end
-
-          rule_files.each do |rule_file|
-            require rule_file
-          rescue LoadError, SyntaxError => error
-            abort("Unable to load linter rules from #{rule_file}: #{error.message}")
-          end
-
-          Rubydex::Linter::Rule.subclasses - existing_rules
+          Rubydex::Linter::RuleLoader.load(workspace_path)
+        rescue Rubydex::Linter::RuleLoadError => error
+          abort(error.message)
         end
 
-        #: (Location location) -> String
-        def format_linter_location(location)
-          display_location = location.to_display
-          path = begin
-            display_location.to_file_path
-          rescue Rubydex::Location::NotFileUriError
-            display_location.uri
+        #: (Array[Diagnostic] diagnostics, Graph graph) -> void
+        def print_offenses(diagnostics, graph)
+          puts("Offenses:")
+          puts
+
+          diagnostics.each do |diagnostic|
+            puts(format_linter_diagnostic(diagnostic, workspace_path: graph.workspace_path))
+            print_source_excerpt(diagnostic.location)
+            puts
           end
+
+          print_summary(graph.documents.count, diagnostics)
+        end
+
+        #: (Location location, workspace_path: String) -> String
+        def format_linter_location(location, workspace_path:)
+          display_location = location.to_display
+          path = Rubydex::Linter::Helpers::PathHelpers.display_path(display_location, workspace: workspace_path)
 
           "#{path}:#{display_location.start_line}:#{display_location.start_column}"
         end
 
-        #: (Diagnostic diagnostic) -> String
-        def format_linter_diagnostic(diagnostic)
-          content = +"#{format_linter_location(diagnostic.location)}: " \
+        #: (Diagnostic diagnostic, workspace_path: String) -> String
+        def format_linter_diagnostic(diagnostic, workspace_path:)
+          content = +"#{format_linter_location(diagnostic.location, workspace_path:)}: " \
             "#{diagnostic.severity.value}: #{diagnostic.rule}: #{diagnostic.message}"
 
           diagnostic.related_information.each do |information|
-            content << "\n  #{format_linter_location(information.location)}: #{information.message}"
+            content << "\n  #{format_linter_location(information.location, workspace_path:)}: #{information.message}"
           end
 
           content
+        end
+
+        #: (Location location) -> void
+        def print_source_excerpt(location)
+          line = source_line_for(location)
+          return unless line
+
+          end_column = location.end_line == location.start_line ? location.end_column : line.length
+          carets = "^" * [end_column - location.start_column, 1].max
+
+          puts
+          puts(line)
+          puts("#{" " * location.start_column}#{carets}")
+        end
+
+        #: (Location location) -> String?
+        def source_line_for(location)
+          source_lines_for(location.to_file_path)[location.start_line]
+        rescue Errno::ENOENT, Errno::EACCES, Rubydex::Location::NotFileUriError
+          nil
+        end
+
+        #: (String path) -> Array[String]
+        def source_lines_for(path)
+          @source_lines_cache ||= {} #: Hash[String, Array[String]]?
+          @source_lines_cache[path] ||= File.readlines(path, chomp: true)
+        end
+
+        #: (Integer file_count, Array[Diagnostic] diagnostics) -> void
+        def print_summary(file_count, diagnostics)
+          if diagnostics.empty?
+            puts("#{file_count} #{pluralize("file", file_count)} inspected, no offenses detected")
+            return
+          end
+
+          severity_counts = diagnostics.map(&:severity).tally
+          offense_count = diagnostics.length
+          error_count = severity_counts.fetch(Rubydex::Severity::Error, 0)
+          warning_count = severity_counts.fetch(Rubydex::Severity::Warning, 0)
+          hint_count = severity_counts.fetch(Rubydex::Severity::Hint, 0)
+          severity_summary = [
+            "#{error_count} #{pluralize("error", error_count)}",
+            "#{warning_count} #{pluralize("warning", warning_count)}",
+            "#{severity_counts.fetch(Rubydex::Severity::Information, 0)} info",
+            "#{hint_count} #{pluralize("hint", hint_count)}",
+          ].join(", ")
+
+          puts(
+            "#{file_count} #{pluralize("file", file_count)} inspected, " \
+              "#{offense_count} #{pluralize("offense", offense_count)} detected: #{severity_summary}",
+          )
+        end
+
+        #: (String word, Integer count) -> String
+        def pluralize(word, count)
+          count == 1 ? word : "#{word}s"
         end
       end
     end
