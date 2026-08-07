@@ -1558,6 +1558,34 @@ mod visibility_tests {
     }
 
     #[test]
+    fn index_module_function_with_body() {
+        let context = index_source({
+            "
+            module Foo
+              module_function
+
+              def bar
+                @value = CONST
+                baz(1)
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 4);
+        assert_eq!(context.graph().document().definitions().len(), 4);
+        assert_eq!(context.graph().document().constant_references().len(), 1);
+        assert_eq!(context.graph().document().method_references().len(), 1);
+        assert_constant_references_eq!(&context, ["CONST"]);
+        assert_method_references_eq!(&context, ["baz"]);
+
+        let methods = context.all_definitions_at("4:3-7:6");
+        assert_eq!(methods.len(), 2);
+        assert_definition_at!(&context, "5:5-5:11", InstanceVariable);
+    }
+
+    #[test]
     fn index_def_node_with_visibility_nested() {
         let context = index_source({
             "
