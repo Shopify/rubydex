@@ -1352,6 +1352,14 @@ impl<'a> RubyOperationBuilder<'a> {
                 flags,
             }));
     }
+
+    fn visit_method_body(&mut self, receiver: Option<NestingReceiver>, body: Option<&ruby_prism::Node<'_>>) {
+        self.nesting_stack.push(Nesting::Method { receiver });
+        if let Some(body) = body {
+            self.visit(body);
+        }
+        self.nesting_stack.pop();
+    }
 }
 
 struct CommentGroup {
@@ -1573,13 +1581,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 signatures: Signatures::Simple(parameters.clone().into_boxed_slice()),
                 receiver: singleton_receiver,
             }));
-            self.nesting_stack.push(Nesting::Method {
-                receiver: method_nesting_receiver,
-            });
-            if let Some(ref body) = body {
-                self.visit(body);
-            }
-            self.nesting_stack.pop();
+            self.visit_method_body(method_nesting_receiver, body.as_ref());
             self.operations.push(Operation::ExitScope);
 
             self.operations.push(Operation::EnterMethod(op::EnterMethod {
@@ -1592,13 +1594,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 signatures: Signatures::Simple(parameters.into_boxed_slice()),
                 receiver,
             }));
-            self.nesting_stack.push(Nesting::Method {
-                receiver: method_nesting_receiver,
-            });
-            if let Some(ref body) = body {
-                self.visit(body);
-            }
-            self.nesting_stack.pop();
+            self.visit_method_body(method_nesting_receiver, body.as_ref());
             self.operations.push(Operation::ExitScope);
         } else {
             // Singleton methods at top level have receiver=None (no class to point self to).
@@ -1627,13 +1623,8 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 signatures: Signatures::Simple(parameters.into_boxed_slice()),
                 receiver,
             }));
-            self.nesting_stack.push(Nesting::Method {
-                receiver: method_nesting_receiver,
-            });
-            if let Some(body) = node.body() {
-                self.visit(&body);
-            }
-            self.nesting_stack.pop();
+            let body = node.body();
+            self.visit_method_body(method_nesting_receiver, body.as_ref());
             self.operations.push(Operation::ExitScope);
 
             if let Some(prev) = previous_visibility {
