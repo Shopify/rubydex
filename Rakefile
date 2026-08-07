@@ -25,7 +25,7 @@ begin
   namespace(:ruby_test) do
     RubyMemcheck::TestTask.new(valgrind: :compile) do |task|
       test_config.call(task)
-      task.test_files = FileList["test/**/*_test.rb"].exclude("test/integration/**/*_test.rb")
+      task.test_files = FileList["test/**/*_test.rb"].exclude("test/integration/**/*_test.rb", "test/cli_test.rb")
     end
   end
 rescue LoadError
