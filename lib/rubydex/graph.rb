@@ -62,7 +62,8 @@ module Rubydex
           # descending them
           next if File.absolute_path?(path)
 
-          paths << File.join(spec.full_gem_path, path)
+          require_path = File.join(spec.full_gem_path, path)
+          paths << require_path if File.directory?(require_path)
         end
       rescue Gem::MissingSpecError
         nil

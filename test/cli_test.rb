@@ -281,6 +281,7 @@ class CLITest < Minitest::Test
       refute_stdout_includes(result, context.absolute_path)
       assert_stderr_includes(result, "Indexing workspace...")
       assert_stderr_includes(result, "Resolving graph...")
+      assert_stderr_includes(result, "Running 2 rules...")
     end
   end
 
@@ -300,13 +301,13 @@ class CLITest < Minitest::Test
     with_context do |context|
       rule_path = "fake_gem/lib/rubydex_linter/rules/no_foo.rb"
       write_linter_rule(context, "CLITestDependencyErrorRule", path: rule_path)
-      context.write!("app.rb", "class Foo; end\n")
+      context.write!("workspace/app.rb", "class Foo; end\n")
       Gem.expects(:find_latest_files)
         .with("rubydex_linter/rules/**/*.rb")
         .returns([context.absolute_path_to(rule_path)])
 
       result = with_bundle_gemfile(context.absolute_path_to("Gemfile")) do
-        rdx("lint", context.absolute_path)
+        rdx("lint", context.absolute_path_to("workspace"))
       end
 
       refute_success_status(result)
@@ -314,16 +315,17 @@ class CLITest < Minitest::Test
     end
   end
 
-  def test_lint_requires_a_discovered_rule_before_indexing
+  def test_lint_runs_built_in_rules_without_project_rules
     with_context do |context|
-      context.write!("app.rb", "class Foo; end\n")
+      context.write!("app.rb", "class Bar; end\n")
 
       result = with_bundle_gemfile(nil) { rdx("lint", context.absolute_path) }
 
-      refute_success_status(result)
-      assert_empty_stdout(result)
-      assert_stderr_includes(result, "No Rubydex::Linter::Rule subclasses were loaded")
-      refute_stderr_includes(result, "Indexing workspace...")
+      assert_success_status(result)
+      assert_stdout_includes_pattern(result, /\d+ files inspected, no offenses detected/)
+      assert_stderr_includes(result, "Indexing workspace...")
+      assert_stderr_includes(result, "Running 1 rule...")
+      refute_stderr_includes(result, "No Rubydex::Linter::Rule subclasses were loaded")
     end
   end
 
@@ -406,7 +408,7 @@ class CLITest < Minitest::Test
     context.write!(path, <<~RUBY)
       # frozen_string_literal: true
 
-      class #{class_name} < Rubydex::Linter::Rule
+      class Rubydex::Linter::Rules::#{class_name} < Rubydex::Linter::Rule
         def severity = Rubydex::Severity::Error
 
         def lint
