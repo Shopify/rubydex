@@ -13,8 +13,6 @@ module Rubydex
 
       #: (Graph, rules: Array[singleton(Rule)], config: LinterConfig) -> void
       def initialize(graph, rules:, config:)
-        raise ArgumentError, "At least one linter rule is required" if rules.empty?
-
         @graph = graph
         @config = config
         @rules = rules.select { |rule| config.rule_enabled?(rule) }.sort_by { |rule| rule.name.to_s }
