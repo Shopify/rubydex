@@ -329,6 +329,9 @@ class Rubydex::RelatedInformation
 end
 
 class Rubydex::Diagnostic
+  sig { returns(T::Array[String]) }
+  def self.graph_rule_names; end
+
   sig do
     params(
       rule: String,

@@ -296,6 +296,39 @@ class CLITest < Minitest::Test
     end
   end
 
+  def test_lint_accepts_and_disables_a_graph_diagnostic_rule
+    with_context do |context|
+      write_linter_rule(context, "CLITestGraphDiagnosticConfigRule")
+      context.write!("app.rb", "unused = true")
+      context.write!("rubydex.toml", <<~TOML)
+        [linter.rules.parse-warning]
+        enabled = false
+      TOML
+
+      result = with_bundle_gemfile(nil) { rdx("lint", context.absolute_path) }
+
+      assert_success_status(result)
+      assert_stdout_includes_pattern(result, /\d+ files inspected, no offenses detected/)
+      refute_stderr_includes(result, "linter config references rules that were not loaded")
+    end
+  end
+
+  def test_lint_warns_about_an_unknown_configured_rule
+    with_context do |context|
+      write_linter_rule(context, "CLITestUnknownConfiguredRule")
+      context.write!("app.rb", "class Bar; end")
+      context.write!("rubydex.toml", <<~TOML)
+        [linter.rules.not-a-rule]
+        enabled = false
+      TOML
+
+      result = with_bundle_gemfile(nil) { rdx("lint", context.absolute_path) }
+
+      assert_success_status(result)
+      assert_stderr_includes(result, "linter config references rules that were not loaded: `not-a-rule`")
+    end
+  end
+
   def test_lint_loads_rules_from_bundled_dependencies
     with_context do |context|
       rule_path = "fake_gem/lib/rubydex_linter/rules/no_foo.rb"

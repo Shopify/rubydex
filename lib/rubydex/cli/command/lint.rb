@@ -43,7 +43,7 @@ module Rubydex
 
         #: (Rubydex::LinterConfig config, Array[singleton(Rubydex::Linter::Rule)] known_rule_classes) -> void
         def warn_unknown_rules(config, known_rule_classes)
-          known_rule_names = known_rule_classes.map(&:rule_name).uniq.sort
+          known_rule_names = (known_rule_classes.map(&:rule_name) + Rubydex::Diagnostic.graph_rule_names).uniq.sort
           unknown_rule_names = config.rules.keys.reject { |name| known_rule_names.include?(name) }.sort
           return if unknown_rule_names.empty?
 

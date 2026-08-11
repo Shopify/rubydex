@@ -3,7 +3,7 @@
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
 use libc::c_char;
-use rubydex::diagnostic::Severity;
+use rubydex::diagnostic::{Rule, Severity};
 use std::{ffi::CString, mem, ptr};
 
 /// C-compatible enum representing diagnostic severity levels.
@@ -50,6 +50,39 @@ impl DiagnosticArray {
         mem::forget(entries);
         Box::into_raw(Box::new(DiagnosticArray { items: ptr, len }))
     }
+}
+
+/// Writes a Rust-allocated array containing every graph diagnostic rule name to `out_names` and returns its length.
+/// The caller must free the array with `free_c_string_array`. Writes null and returns zero when there are no names.
+///
+/// # Panics
+///
+/// Panics if a generated rule name contains `\0`, which C strings cannot represent.
+///
+/// # Safety
+///
+/// - `out_names` must be a valid, writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_diagnostic_names(out_names: *mut *const *const c_char) -> usize {
+    let c_strings: Vec<*const c_char> = Rule::ALL
+        .iter()
+        .map(ToString::to_string)
+        .map(|name| {
+            CString::new(name)
+                .expect("generated graph diagnostic rule names cannot contain null bytes")
+                .into_raw()
+                .cast_const()
+        })
+        .collect();
+    let count = c_strings.len();
+
+    if count == 0 {
+        unsafe { *out_names = ptr::null() };
+        return 0;
+    }
+
+    unsafe { *out_names = Box::into_raw(c_strings.into_boxed_slice()).cast::<*const c_char>() };
+    count
 }
 
 /// Returns all diagnostics currently recorded in the global graph.

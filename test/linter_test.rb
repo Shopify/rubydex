@@ -188,6 +188,47 @@ class LinterTest < Minitest::Test
     refute_predicate(result, :success?)
   end
 
+  def test_runner_drops_disabled_graph_diagnostics_by_rule_name
+    with_context do |context|
+      context.write!("workspace/warning.rb", "unused = true")
+      context.write!("workspace/error.rb", "class Broken")
+      graph = Rubydex::Graph.configure_for_workspace(context.absolute_path_to("workspace"))
+      graph.index_all(context.glob("workspace/**/*.rb"))
+      config = configured_linter_config("parse-warning", enabled: false)
+
+      assert_equal(["parse-error", "parse-error", "parse-warning"], graph.diagnostics.map(&:rule).sort)
+
+      result = Rubydex::Linter::Runner.new(graph, rules: [], config:).run
+
+      assert_equal(["parse-error", "parse-error"], result.diagnostics.map(&:rule))
+    end
+  end
+
+  def test_runner_does_not_report_graph_diagnostics_from_excluded_paths
+    with_context do |context|
+      context.write!("workspace/components/legacy/example.rb", "unused = true")
+      context.write!("workspace/components/current/example.rb", "unused = true")
+      graph = Rubydex::Graph.configure_for_workspace(context.absolute_path_to("workspace"))
+      graph.index_all(context.glob("workspace/**/*.rb"))
+      config = configured_linter_config("parse-warning", exclude_patterns: ["components/legacy/**"])
+
+      expected_uris = [
+        context.uri_to("workspace/components/current/example.rb"),
+        context.uri_to("workspace/components/legacy/example.rb"),
+      ]
+      # Graph diagnostics are not disabled via linter configs and should still be created.
+      assert_equal(expected_uris.sort, graph.diagnostics.map { |diagnostic| diagnostic.location.uri }.sort)
+
+      result = Rubydex::Linter::Runner.new(graph, rules: [], config:).run
+
+      # But the excluded graph diagnostics will not appear in the linter results.
+      assert_equal(
+        [expected_uris.first],
+        result.diagnostics.map { |diagnostic| diagnostic.location.uri },
+      )
+    end
+  end
+
   def test_runner_accepts_no_rules
     result = Rubydex::Linter::Runner.new(Rubydex::Graph.new, rules: [], config: linter_config).run
 
@@ -215,6 +256,22 @@ class LinterTest < Minitest::Test
       Gem.stubs(:path).returns([dependency_path])
 
       result = Rubydex::Linter::Runner.new(graph, rules: [DependencyPathRule], config: linter_config).run
+
+      assert_empty(result.diagnostics)
+    end
+  end
+
+  def test_runner_filters_graph_diagnostics_under_dependency_paths
+    with_context do |context|
+      context.write!("workspace/vendor/bundle/gems/broken.rb", "class Broken")
+      graph = Rubydex::Graph.configure_for_workspace(context.absolute_path_to("workspace"))
+      graph.index_all(context.glob("workspace/**/*.rb"))
+      dependency_path = context.absolute_path_to("workspace/vendor/bundle")
+      Gem.stubs(:path).returns([dependency_path])
+
+      assert_equal(["parse-error", "parse-error"], graph.diagnostics.map(&:rule))
+
+      result = Rubydex::Linter::Runner.new(graph, rules: [], config: linter_config).run
 
       assert_empty(result.diagnostics)
     end

@@ -98,6 +98,15 @@ macro_rules! rules {
             )*
         }
 
+        impl Rule {
+            /// All diagnostic rules emitted by the graph.
+            pub const ALL: &[Self] = &[
+                $(
+                    Self::$variant,
+                )*
+            ];
+        }
+
         impl std::fmt::Display for Rule {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(f, "{}", match self {
