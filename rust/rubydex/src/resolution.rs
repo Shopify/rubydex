@@ -15,6 +15,7 @@ use crate::model::{
     name::{Name, NameRef, ParentScope},
     visibility::Visibility,
 };
+use crate::offset::Offset;
 
 enum Outcome {
     /// The constant was successfully resolved to the given declaration ID.
@@ -2004,7 +2005,7 @@ impl<'a> Resolver<'a> {
             }
             Declaration::Namespace(Namespace::Class(_)) => {
                 // For classes (the regular case), we need to return the singleton class of its superclass
-                let Some((superclass_id, unresolved_superclass)) = self.get_superclass(attached_id) else {
+                let Some((superclass_id, unresolved_superclass, _)) = self.get_superclass(attached_id) else {
                     // BasicObject has no superclass, but its singleton class inherits from Class
                     return (*CLASS_ID, false);
                 };
@@ -2024,13 +2025,17 @@ impl<'a> Resolver<'a> {
 
     /// Returns the selected superclass and any unresolved explicit superclass. The top-level `BasicObject` declaration
     /// is Ruby's root class and is the only class without a superclass.
-    fn get_superclass(&self, declaration_id: DeclarationId) -> Option<(DeclarationId, Option<NameId>)> {
+    fn get_superclass(
+        &self,
+        declaration_id: DeclarationId,
+    ) -> Option<(DeclarationId, Option<NameId>, Vec<(UriId, Offset)>)> {
         if declaration_id == *BASIC_OBJECT_ID {
             return None;
         }
 
         let declaration = self.graph.declarations().get(&declaration_id).unwrap();
-        let mut explicit_superclasses = Vec::new();
+        let mut explicit_superclass = None;
+        let mut mismatches = Vec::new();
         let mut unresolved_superclass = None;
 
         for definition_id in declaration.definitions() {
@@ -2045,7 +2050,13 @@ impl<'a> Resolver<'a> {
                 match name {
                     NameRef::Resolved(resolved) => {
                         if let Some(superclass_id) = self.resolve_to_namespace(*resolved.declaration_id()) {
-                            explicit_superclasses.push(superclass_id);
+                            match explicit_superclass {
+                                Some(expected_id) if expected_id != superclass_id => {
+                                    mismatches.push((constant_reference.uri_id(), constant_reference.offset().clone()));
+                                }
+                                None => explicit_superclass = Some(superclass_id),
+                                _ => {}
+                            }
                         }
                     }
                     NameRef::Unresolved(_) => {
@@ -2055,16 +2066,36 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        // If there's more than one superclass that isn't `Object` and they are different, then there's a superclass
-        // mismatch error. TODO: We should add a diagnostic here
         Some((
-            explicit_superclasses.first().copied().unwrap_or(*OBJECT_ID),
+            explicit_superclass.unwrap_or(*OBJECT_ID),
             unresolved_superclass,
+            mismatches,
         ))
     }
 
     fn linearize_superclass(&mut self, declaration_id: DeclarationId, state: &mut ChainState) -> Option<Ancestors> {
-        let (superclass_id, unresolved_superclass) = self.get_superclass(declaration_id)?;
+        let (superclass_id, unresolved_superclass, mismatches) = self.get_superclass(declaration_id)?;
+
+        if !mismatches.is_empty() {
+            let class_name = self
+                .graph
+                .declarations()
+                .get(&declaration_id)
+                .unwrap()
+                .name()
+                .to_string();
+            for (uri_id, offset) in mismatches {
+                let diagnostic = Diagnostic::new(
+                    Rule::SuperclassMismatch,
+                    Severity::Error,
+                    uri_id,
+                    offset,
+                    format!("superclass mismatch for class `{class_name}`"),
+                );
+                self.graph.add_document_diagnostic(uri_id, diagnostic);
+            }
+        }
+
         let mut result = self.linearize_ancestors(superclass_id);
 
         if let Some(name_id) = unresolved_superclass {

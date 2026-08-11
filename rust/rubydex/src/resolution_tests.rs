@@ -982,6 +982,57 @@ mod superclass_tests {
     use super::*;
 
     #[test]
+    fn contradictory_superclasses_emit_diagnostic() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Bar; end
+            class NotBar; end
+            class Foo < Bar; end
+            class Foo < NotBar; end
+            "
+        });
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            context,
+            &["superclass-mismatch: superclass mismatch for class `Foo` (4:13-4:19)"],
+            severity: Severity::Error
+        );
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
+    fn repeated_superclass_does_not_emit_diagnostic() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Bar; end
+            class Foo < Bar; end
+            class Foo < Bar; end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+    }
+
+    #[test]
+    fn superclassless_reopening_does_not_emit_diagnostic() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Bar; end
+            class Foo < Bar; end
+            class Foo; end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+    }
+
+    #[test]
     fn linearizing_super_classes() {
         let mut context = graph_test();
         context.index_uri("file:///foo.rb", {
