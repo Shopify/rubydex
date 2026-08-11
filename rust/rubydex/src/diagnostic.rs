@@ -124,6 +124,7 @@ rules! {
     InvalidMethodVisibility;
 
     // Resolution
+    SuperclassMismatch;
     UndefinedMethodVisibilityTarget;
     UndefinedConstantVisibilityTarget;
 }
