@@ -5,6 +5,7 @@
 #include "document.h"
 #include "graph.h"
 #include "location.h"
+#include "linter_rule.h"
 #include "query.h"
 #include "reference.h"
 #include "signature.h"
@@ -28,6 +29,7 @@ void Init_rubydex(void) {
     rdxi_initialize_definition(mRubydex);
     rdxi_initialize_location(mRubydex);
     rdxi_initialize_diagnostic(mRubydex);
+    rdxi_initialize_linter_rule(mRubydex);
     rdxi_initialize_reference(mRubydex);
     rdxi_initialize_signature(mRubydex);
 }

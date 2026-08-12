@@ -4,7 +4,9 @@
 //! by the applier to create definitions and declarations in a `LocalGraph`.
 
 use std::collections::hash_map::Entry;
+use std::sync::Arc;
 
+use crate::config::Config;
 use crate::diagnostic::{Diagnostic, Rule, Severity};
 use crate::model::comment::Comment;
 use crate::model::definitions::{DefinitionFlags, Parameter, ParameterStruct, Signatures};
@@ -88,6 +90,11 @@ pub struct RubyOperationBuilder<'a> {
 impl<'a> RubyOperationBuilder<'a> {
     #[must_use]
     pub fn new(uri: String, source: &'a str) -> Self {
+        Self::new_with_config(uri, source, Arc::new(Config::default()))
+    }
+
+    #[must_use]
+    pub(crate) fn new_with_config(uri: String, source: &'a str, config: Arc<Config>) -> Self {
         let uri_id = UriId::from(&uri);
 
         Self {
@@ -95,7 +102,7 @@ impl<'a> RubyOperationBuilder<'a> {
             source,
             strings: IdentityHashMap::default(),
             names: IdentityHashMap::default(),
-            document: Document::new(uri, source),
+            document: Document::new_with_config(uri, source, config),
             comments: Vec::new(),
             nesting_stack: Vec::new(),
             visibility_stack: vec![VisibilityModifier::new(Visibility::Private, false, Offset::new(0, 0))],

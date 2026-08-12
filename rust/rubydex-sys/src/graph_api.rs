@@ -246,8 +246,8 @@ pub unsafe extern "C" fn rdx_graph_workspace_path(pointer: GraphPointer) -> *con
 }
 
 /// Applies a parsed configuration file to the graph, which adopts the workspace it was loaded for along with the
-/// settings of its `[graph]` section. This is the only way to point the graph at a workspace other than the current
-/// directory, and it replaces any previously applied configuration. Tool-specific sections are ignored.
+/// settings of its `[graph]` and `[linter]` sections. This is the only way to point the graph at a workspace other than
+/// the current directory, and it replaces any previously applied configuration.
 ///
 /// # Safety
 ///

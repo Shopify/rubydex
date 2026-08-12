@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::config::Config;
 use crate::diagnostic::Diagnostic;
@@ -90,9 +91,9 @@ pub struct Graph {
     pending_work: Vec<Unit>,
 
     /// Project configuration
-    config: Config,
+    config: Arc<Config>,
 }
-assert_mem_size!(Graph, 368);
+assert_mem_size!(Graph, 296);
 assert_send_sync!(Graph);
 
 impl Graph {
@@ -109,7 +110,7 @@ impl Graph {
             position_encoding: Encoding::default(),
             name_dependents: IdentityHashMap::default(),
             pending_work: Vec::default(),
-            config: Config::default(),
+            config: Arc::new(Config::default()),
         };
 
         add_built_in_data(&mut graph);
@@ -131,7 +132,7 @@ impl Graph {
     /// Adds glob patterns to exclude from file discovery during indexing. Excluded directories will be skipped entirely
     /// during directory traversal.
     pub fn exclude_patterns(&mut self, patterns: Vec<Box<str>>) {
-        self.config.exclude_patterns(patterns);
+        Arc::make_mut(&mut self.config).exclude_patterns(patterns);
     }
 
     /// Returns the set of exclusion patterns.
@@ -148,7 +149,16 @@ impl Graph {
 
     /// Loads a config for the graph
     pub fn load_config(&mut self, config: &Config) {
-        self.config = config.clone();
+        let config = Arc::new(config.clone());
+        for document in self.documents.values_mut() {
+            document.set_config(Arc::clone(&config));
+        }
+        self.config = config;
+    }
+
+    #[must_use]
+    pub(crate) fn config(&self) -> Arc<Config> {
+        Arc::clone(&self.config)
     }
 
     /// # Panics

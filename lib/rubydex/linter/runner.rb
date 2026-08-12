@@ -27,11 +27,8 @@ module Rubydex
           rule.diagnostics
         end
 
-        # Graph diagnostics are surfaced by the linter, but not owned by it. Linter configuration controls
-        # surfacing here, not registration in the graph.
         diagnostics = (@graph.diagnostics + rule_diagnostics).select do |diagnostic|
           !location_in_dependency_path?(diagnostic.location) &&
-            diagnostic_included_by_config?(diagnostic) &&
             diagnostic_in_workspace?(diagnostic)
         end.sort_by do |diagnostic|
           location = diagnostic.location
@@ -51,14 +48,6 @@ module Rubydex
 
       private
 
-      #: (Diagnostic) -> bool
-      def diagnostic_included_by_config?(diagnostic)
-        rule_config = @config.rules[diagnostic.rule]
-        return true unless rule_config
-
-        rule_config.enabled? && !location_matches_patterns?(diagnostic.location, rule_config.exclude_patterns)
-      end
-
       #: (Location) -> bool
       def location_in_dependency_path?(location)
         path = location.to_file_path
@@ -66,20 +55,6 @@ module Rubydex
         @dependency_paths.any? do |dependency_path|
           path == dependency_path || path.start_with?("#{dependency_path}/")
         end
-      rescue Location::NotFileUriError
-        false
-      end
-
-      #: (Location, Array[String]) -> bool
-      def location_matches_patterns?(location, patterns)
-        return false if patterns.empty?
-
-        Helpers::PathHelpers.path_matches_patterns?(
-          location.to_file_path,
-          patterns,
-          workspace: @graph.workspace_path,
-          flags: Helpers::PathHelpers::RUBOCOP_EXCLUDE_FNMATCH_FLAGS,
-        )
       rescue Location::NotFileUriError
         false
       end

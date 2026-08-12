@@ -1,4 +1,5 @@
 use crate::{
+    config::Config,
     errors::Errors,
     indexing::{local_graph::LocalGraph, rbs_indexer::RBSIndexer, ruby_indexer::RubyIndexer},
     job_queue::{Job, JobQueue},
@@ -53,6 +54,7 @@ impl LanguageId {
 pub struct IndexingJob {
     path: PathBuf,
     backend: IndexerBackend,
+    config: Arc<Config>,
     local_graph_tx: Sender<LocalGraph>,
     errors_tx: Sender<Errors>,
 }
@@ -62,12 +64,14 @@ impl IndexingJob {
     pub fn new(
         path: PathBuf,
         backend: IndexerBackend,
+        config: Arc<Config>,
         local_graph_tx: Sender<LocalGraph>,
         errors_tx: Sender<Errors>,
     ) -> Self {
         Self {
             path,
             backend,
+            config,
             local_graph_tx,
             errors_tx,
         }
@@ -101,7 +105,13 @@ impl Job for IndexingJob {
         };
 
         let language = self.path.extension().map_or(LanguageId::Ruby, LanguageId::from);
-        let local_graph = build_local_graph(url.to_string(), &source, &language, self.backend);
+        let local_graph = build_local_graph(
+            url.to_string(),
+            &source,
+            &language,
+            self.backend,
+            Arc::clone(&self.config),
+        );
 
         self.local_graph_tx
             .send(local_graph)
@@ -111,7 +121,13 @@ impl Job for IndexingJob {
 
 /// Indexes a single source string in memory, dispatching to the appropriate indexer based on `language_id`.
 pub fn index_source(graph: &mut Graph, uri: &str, source: &str, language_id: &LanguageId) {
-    let local_graph = build_local_graph(uri.to_string(), source, language_id, IndexerBackend::RubyIndexer);
+    let local_graph = build_local_graph(
+        uri.to_string(),
+        source,
+        language_id,
+        IndexerBackend::RubyIndexer,
+        graph.config(),
+    );
     graph.consume_document_changes(local_graph);
 }
 
@@ -124,11 +140,13 @@ pub fn index_files(graph: &mut Graph, paths: Vec<PathBuf>, backend: IndexerBacke
     let queue = Arc::new(JobQueue::new());
     let (local_graphs_tx, local_graphs_rx) = unbounded();
     let (errors_tx, errors_rx) = unbounded();
+    let config = graph.config();
 
     for path in paths {
         queue.push(Box::new(IndexingJob::new(
             path,
             backend,
+            Arc::clone(&config),
             local_graphs_tx.clone(),
             errors_tx.clone(),
         )));
@@ -153,22 +171,28 @@ pub fn index_files(graph: &mut Graph, paths: Vec<PathBuf>, backend: IndexerBacke
 
 /// Indexes a source string using the appropriate indexer for the given language.
 #[must_use]
-pub fn build_local_graph(uri: String, source: &str, language: &LanguageId, backend: IndexerBackend) -> LocalGraph {
+pub fn build_local_graph(
+    uri: String,
+    source: &str,
+    language: &LanguageId,
+    backend: IndexerBackend,
+    config: Arc<Config>,
+) -> LocalGraph {
     match language {
         LanguageId::Ruby => match backend {
             IndexerBackend::RubyIndexer => {
-                let mut indexer = RubyIndexer::new(uri, source);
+                let mut indexer = RubyIndexer::new_with_config(uri, source, config);
                 indexer.index();
                 indexer.local_graph()
             }
             IndexerBackend::OperationBuilder => {
-                let builder = RubyOperationBuilder::new(uri, source);
+                let builder = RubyOperationBuilder::new_with_config(uri, source, config);
                 let result = builder.build();
                 crate::operation::applier::apply_operations(result)
             }
         },
         LanguageId::Rbs => {
-            let mut indexer = RBSIndexer::new(uri, source);
+            let mut indexer = RBSIndexer::new_with_config(uri, source, config);
             indexer.index();
             indexer.local_graph()
         }
@@ -177,11 +201,23 @@ pub fn build_local_graph(uri: String, source: &str, language: &LanguageId, backe
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
     use super::*;
+    use crate::config::Config;
+    use crate::diagnostic::{Rule, Severity};
+    use crate::model::ids::UriId;
+    use crate::resolution::Resolver;
     use crate::test_utils::Context;
-    use std::path::Path;
+
+    fn graph_with_config(workspace: &Path, content: &str) -> Graph {
+        fs::write(workspace.join("rubydex.toml"), content).unwrap();
+        let config = Config::load(workspace).unwrap();
+        let mut graph = Graph::new();
+        graph.load_config(&config);
+        graph
+    }
 
     #[test]
     fn index_relative_paths() {
@@ -232,5 +268,91 @@ mod tests {
 
         assert_eq!(5, graph.definitions().len());
         assert_eq!(2, graph.documents().len());
+    }
+
+    #[test]
+    fn single_source_indexing_does_not_store_disabled_graph_diagnostics() {
+        let workspace = tempfile::tempdir().unwrap();
+        let mut graph = graph_with_config(workspace.path(), "[linter.rules.parse-warning]\nenabled = false\n");
+        let path = workspace.path().join("warning.rb");
+        let uri = Url::from_file_path(path).unwrap().to_string();
+
+        index_source(&mut graph, &uri, "foo = 42", &LanguageId::Ruby);
+
+        assert!(
+            graph
+                .all_diagnostics()
+                .iter()
+                .all(|diagnostic| diagnostic.rule() != &Rule::ParseWarning)
+        );
+    }
+
+    #[test]
+    fn parallel_indexing_applies_workspace_excludes_and_severity_to_graph_diagnostics() {
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_path = crate::path_helpers::resolved(workspace.path()).unwrap();
+        let excluded_path = workspace_path.join("components/legacy/warning.rb");
+        let included_path = workspace_path.join("components/current/warning.rb");
+        fs::create_dir_all(excluded_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(included_path.parent().unwrap()).unwrap();
+        fs::write(&excluded_path, "foo = 42").unwrap();
+        fs::write(&included_path, "foo = 42").unwrap();
+        let included_uri = Url::from_file_path(&included_path).unwrap().to_string();
+
+        for backend in [IndexerBackend::RubyIndexer, IndexerBackend::OperationBuilder] {
+            let mut graph = graph_with_config(
+                workspace.path(),
+                "[linter.rules.parse-warning]\nexclude = [\"components/{legacy,generated}/**\"]\nseverity = \"hint\"\n",
+            );
+            let errors = index_files(&mut graph, vec![excluded_path.clone(), included_path.clone()], backend);
+            assert!(errors.is_empty(), "unexpected indexing errors: {errors:?}");
+
+            let diagnostics: Vec<_> = graph
+                .all_diagnostics()
+                .into_iter()
+                .filter(|diagnostic| diagnostic.rule() == &Rule::ParseWarning)
+                .collect();
+            assert_eq!(1, diagnostics.len(), "unexpected diagnostics for {backend:?}");
+            assert_eq!(&UriId::from(included_uri.as_str()), diagnostics[0].uri_id());
+            assert_eq!(&Severity::Hint, diagnostics[0].severity());
+        }
+    }
+
+    #[test]
+    fn resolution_diagnostics_use_the_same_graph_configuration() {
+        let source = "class Foo\n  private :nonexistent\nend";
+
+        for (settings, expected_severity) in [
+            ("enabled = false", None),
+            ("severity = \"information\"", Some(Severity::Information)),
+        ] {
+            let workspace = tempfile::tempdir().unwrap();
+            let path = workspace.path().join("foo.rb");
+            let uri = Url::from_file_path(path).unwrap().to_string();
+            let config = format!("[linter.rules.undefined-method-visibility-target]\n{settings}\n");
+            fs::write(workspace.path().join("rubydex.toml"), config).unwrap();
+            let config = Config::load(workspace.path()).unwrap();
+
+            for backend in [IndexerBackend::RubyIndexer, IndexerBackend::OperationBuilder] {
+                let mut graph = Graph::new();
+                let local_graph = build_local_graph(uri.clone(), source, &LanguageId::Ruby, backend, graph.config());
+                graph.consume_document_changes(local_graph);
+                graph.load_config(&config);
+                Resolver::new(&mut graph).resolve();
+
+                let diagnostics: Vec<_> = graph
+                    .all_diagnostics()
+                    .into_iter()
+                    .filter(|diagnostic| diagnostic.rule() == &Rule::UndefinedMethodVisibilityTarget)
+                    .collect();
+                match expected_severity {
+                    Some(severity) => {
+                        assert_eq!(1, diagnostics.len(), "unexpected diagnostics for {backend:?}");
+                        assert_eq!(&severity, diagnostics[0].severity());
+                    }
+                    None => assert!(diagnostics.is_empty(), "unexpected diagnostics for {backend:?}"),
+                }
+            }
+        }
     }
 }

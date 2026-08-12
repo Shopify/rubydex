@@ -93,6 +93,9 @@ module Rubydex
       #|   ?related_information: Array[RelatedInformation],
       #| ) -> void
       def add_diagnostic(message, location, related_information: [])
+        exclude_patterns = config.excludes_for(self.class)
+        return if location_matches_patterns?(location, exclude_patterns)
+
         @diagnostics << Diagnostic.new(
           rule: self.class.rule_name,
           message: message,
@@ -100,6 +103,22 @@ module Rubydex
           severity: verified_severity,
           related_information: related_information,
         )
+      end
+
+      private
+
+      #: (Location, Array[String]) -> bool
+      def location_matches_patterns?(location, patterns)
+        return false if patterns.empty?
+
+        Helpers::PathHelpers.path_matches_patterns?(
+          location.to_file_path,
+          patterns,
+          workspace: graph.workspace_path,
+          flags: Helpers::PathHelpers::RUBOCOP_EXCLUDE_FNMATCH_FLAGS,
+        )
+      rescue Location::NotFileUriError
+        false
       end
     end
 

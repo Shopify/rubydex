@@ -296,9 +296,8 @@ class CLITest < Minitest::Test
     end
   end
 
-  def test_lint_accepts_and_disables_a_graph_diagnostic_rule
+  def test_lint_accepts_and_disables_a_built_in_rule_without_custom_rules
     with_context do |context|
-      write_linter_rule(context, "CLITestGraphDiagnosticConfigRule")
       context.write!("app.rb", "unused = true")
       context.write!("rubydex.toml", <<~TOML)
         [linter.rules.parse-warning]
@@ -347,16 +346,15 @@ class CLITest < Minitest::Test
     end
   end
 
-  def test_lint_requires_a_discovered_rule_before_indexing
+  def test_lint_runs_built_in_rules_without_custom_rules
     with_context do |context|
-      context.write!("app.rb", "class Foo; end\n")
+      context.write!("app.rb", "class Broken")
 
       result = with_bundle_gemfile(nil) { rdx("lint", context.absolute_path) }
 
       refute_success_status(result)
-      assert_empty_stdout(result)
-      assert_stderr_includes(result, "No Rubydex::Linter::Rule subclasses were loaded")
-      refute_stderr_includes(result, "Indexing workspace...")
+      assert_stdout_includes(result, "error: parse-error:")
+      assert_stderr_includes(result, "Indexing workspace...")
     end
   end
 

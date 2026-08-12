@@ -3,24 +3,6 @@
 require "test_helper"
 
 class DiagnosticTest < Minitest::Test
-  def test_graph_rule_names
-    assert_equal(
-      [
-        "parse-error",
-        "parse-warning",
-        "dynamic-constant-reference",
-        "dynamic-singleton-definition",
-        "dynamic-ancestor",
-        "top-level-mixin-self",
-        "invalid-constant-visibility",
-        "invalid-method-visibility",
-        "undefined-method-visibility-target",
-        "undefined-constant-visibility-target",
-      ],
-      Rubydex::Diagnostic.graph_rule_names,
-    )
-  end
-
   def test_severity_from_value
     {
       error: Rubydex::Severity::Error,

@@ -1,5 +1,5 @@
 use crate::assert_mem_size;
-use crate::diagnostic::Severity;
+use crate::diagnostic::{Diagnostic, Rule as DiagnosticRule, Severity};
 use crate::errors::Errors;
 use crate::path_helpers;
 use std::collections::HashSet;
@@ -68,12 +68,274 @@ impl GraphSettings {
     }
 }
 
+/// Precompiled equivalent of the Ruby `File.fnmatch` flags used by custom linter rule excludes.
+#[derive(Debug, Clone)]
+struct FnmatchPattern {
+    tokens: Box<[FnmatchToken]>,
+}
+
+#[derive(Debug, Clone)]
+enum FnmatchToken {
+    Literal(char),
+    AnyChar,
+    AnySequence,
+    AnyRecursiveSequence,
+    CharacterClass {
+        negated: bool,
+        specifiers: Box<[CharacterSpecifier]>,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CharacterSpecifier {
+    Character(char),
+    Range(char, char),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CharacterClassAtom {
+    character: char,
+    escaped: bool,
+}
+
+impl FnmatchPattern {
+    fn compile_all(pattern: &str) -> Vec<Self> {
+        expand_braces(pattern)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|pattern| Self::compile(&pattern))
+            .collect()
+    }
+
+    fn compile(pattern: &str) -> Option<Self> {
+        let characters: Vec<char> = pattern.chars().collect();
+        let mut tokens = Vec::new();
+        let mut index = 0;
+
+        while index < characters.len() {
+            match characters[index] {
+                '\\' => {
+                    index += 1;
+                    tokens.push(FnmatchToken::Literal(*characters.get(index)?));
+                    index += 1;
+                }
+                '?' => {
+                    tokens.push(FnmatchToken::AnyChar);
+                    index += 1;
+                }
+                '*' => {
+                    let start = index;
+                    while characters.get(index) == Some(&'*') {
+                        index += 1;
+                    }
+
+                    let is_recursive = index - start == 2
+                        && (start == 0 || characters[start - 1] == '/')
+                        && characters.get(index) == Some(&'/');
+                    if is_recursive {
+                        tokens.push(FnmatchToken::AnyRecursiveSequence);
+                        index += 1;
+                    } else {
+                        tokens.push(FnmatchToken::AnySequence);
+                    }
+                }
+                '[' => {
+                    let (token, next_index) = parse_character_class(&characters, index)?;
+                    tokens.push(token);
+                    index = next_index;
+                }
+                '{' => return None,
+                character => {
+                    tokens.push(FnmatchToken::Literal(character));
+                    index += 1;
+                }
+            }
+        }
+
+        Some(Self {
+            tokens: tokens.into_boxed_slice(),
+        })
+    }
+
+    fn matches(&self, path: &str) -> bool {
+        let path: Vec<char> = path.chars().collect();
+        let mut memo = vec![vec![None; path.len() + 1]; self.tokens.len() + 1];
+        self.matches_from(0, 0, &path, &mut memo)
+    }
+
+    fn matches_from(
+        &self,
+        token_index: usize,
+        path_index: usize,
+        path: &[char],
+        memo: &mut [Vec<Option<bool>>],
+    ) -> bool {
+        if let Some(result) = memo[token_index][path_index] {
+            return result;
+        }
+
+        let result = match self.tokens.get(token_index) {
+            None => path_index == path.len(),
+            Some(FnmatchToken::Literal(expected)) => {
+                path.get(path_index) == Some(expected) && self.matches_from(token_index + 1, path_index + 1, path, memo)
+            }
+            Some(FnmatchToken::AnyChar) => {
+                path.get(path_index).is_some_and(|character| *character != '/')
+                    && self.matches_from(token_index + 1, path_index + 1, path, memo)
+            }
+            Some(FnmatchToken::AnySequence) => {
+                self.matches_from(token_index + 1, path_index, path, memo)
+                    || (path.get(path_index).is_some_and(|character| *character != '/')
+                        && self.matches_from(token_index, path_index + 1, path, memo))
+            }
+            Some(FnmatchToken::AnyRecursiveSequence) => {
+                self.matches_from(token_index + 1, path_index, path, memo)
+                    || path[path_index..].iter().enumerate().any(|(offset, character)| {
+                        *character == '/' && self.matches_from(token_index + 1, path_index + offset + 1, path, memo)
+                    })
+            }
+            Some(FnmatchToken::CharacterClass { negated, specifiers }) => path
+                .get(path_index)
+                .filter(|character| **character != '/')
+                .is_some_and(|character| {
+                    let included = specifiers.iter().any(|specifier| match specifier {
+                        CharacterSpecifier::Character(expected) => character == expected,
+                        CharacterSpecifier::Range(start, end) if start <= end => start <= character && character <= end,
+                        CharacterSpecifier::Range(start, end) => character == start || character == end,
+                    });
+                    included != *negated && self.matches_from(token_index + 1, path_index + 1, path, memo)
+                }),
+        };
+
+        memo[token_index][path_index] = Some(result);
+        result
+    }
+}
+
+fn parse_character_class(characters: &[char], open: usize) -> Option<(FnmatchToken, usize)> {
+    let mut index = open + 1;
+    let negated = matches!(characters.get(index), Some('!' | '^'));
+    if negated {
+        index += 1;
+    }
+
+    let mut atoms = Vec::new();
+    loop {
+        match *characters.get(index)? {
+            ']' => break,
+            '{' | '}' => return None,
+            '\\' => {
+                index += 1;
+                atoms.push(CharacterClassAtom {
+                    character: *characters.get(index)?,
+                    escaped: true,
+                });
+                index += 1;
+            }
+            character => {
+                atoms.push(CharacterClassAtom {
+                    character,
+                    escaped: false,
+                });
+                index += 1;
+            }
+        }
+    }
+
+    if atoms.is_empty() {
+        return None;
+    }
+
+    let mut specifiers = Vec::new();
+    let mut atom_index = 0;
+    while atom_index < atoms.len() {
+        if let (Some(start), Some(hyphen), Some(end)) = (
+            atoms.get(atom_index),
+            atoms.get(atom_index + 1),
+            atoms.get(atom_index + 2),
+        ) && hyphen.character == '-'
+            && !hyphen.escaped
+        {
+            specifiers.push(CharacterSpecifier::Range(start.character, end.character));
+            atom_index += 3;
+        } else {
+            specifiers.push(CharacterSpecifier::Character(atoms[atom_index].character));
+            atom_index += 1;
+        }
+    }
+
+    Some((
+        FnmatchToken::CharacterClass {
+            negated,
+            specifiers: specifiers.into_boxed_slice(),
+        },
+        index + 1,
+    ))
+}
+
+fn expand_braces(pattern: &str) -> Result<Vec<String>, ()> {
+    let Some((open, close, commas)) = brace_group(pattern)? else {
+        return Ok(vec![pattern.to_string()]);
+    };
+
+    let mut boundaries = Vec::with_capacity(commas.len() + 2);
+    boundaries.push(open + 1);
+    boundaries.extend(commas.iter().map(|comma| comma + 1));
+
+    let mut expanded_patterns = Vec::new();
+    for (index, start) in boundaries.iter().enumerate() {
+        let end = commas.get(index).copied().unwrap_or(close);
+        let mut expanded = String::with_capacity(pattern.len());
+        expanded.push_str(&pattern[..open]);
+        expanded.push_str(&pattern[*start..end]);
+        expanded.push_str(&pattern[close + 1..]);
+        expanded_patterns.extend(expand_braces(&expanded)?);
+    }
+
+    Ok(expanded_patterns)
+}
+
+fn brace_group(pattern: &str) -> Result<Option<(usize, usize, Vec<usize>)>, ()> {
+    let mut groups: Vec<(usize, Vec<usize>)> = Vec::new();
+    let mut escaped = false;
+    let mut in_character_class = false;
+
+    for (index, character) in pattern.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        match character {
+            '\\' => escaped = true,
+            '[' => in_character_class = true,
+            ']' if in_character_class => in_character_class = false,
+            _ if in_character_class => {}
+            '{' => groups.push((index, Vec::new())),
+            ',' => {
+                if let Some((_, commas)) = groups.last_mut() {
+                    commas.push(index);
+                }
+            }
+            '}' => {
+                if let Some((open, commas)) = groups.pop() {
+                    return Ok(Some((open, index, commas)));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if groups.is_empty() { Ok(None) } else { Err(()) }
+}
+
 /// The setting of a single linter rule, read from a `[linter.rules.RuleName]` table
 #[derive(Debug, Clone)]
 pub struct Rule {
     name: Box<str>,
     enabled: bool,
     exclude_patterns: Box<[Box<str>]>,
+    exclude_matchers: Box<[FnmatchPattern]>,
     severity: Option<Severity>,
 }
 
@@ -96,6 +358,10 @@ impl Rule {
     #[must_use]
     pub fn severity(&self) -> Option<&Severity> {
         self.severity.as_ref()
+    }
+
+    fn excludes(&self, path: &str) -> bool {
+        self.exclude_matchers.iter().any(|pattern| pattern.matches(path))
     }
 
     /// Parses a single `[linter.rules.{name}]` table
@@ -135,10 +401,16 @@ impl Rule {
             return Err(format!("unknown setting `linter.rules.{name}.{key}`"));
         }
 
+        let exclude_matchers = exclude_patterns
+            .iter()
+            .flat_map(|pattern| FnmatchPattern::compile_all(pattern))
+            .collect();
+
         Ok(Self {
             name: Box::from(name),
             enabled,
             exclude_patterns,
+            exclude_matchers,
             severity,
         })
     }
@@ -154,6 +426,12 @@ impl LinterSettings {
     #[must_use]
     pub fn rules(&self) -> &[Rule] {
         &self.rules
+    }
+
+    #[must_use]
+    pub(crate) fn diagnostic_rule(&self, rule: DiagnosticRule) -> Option<&Rule> {
+        let name = rule.name();
+        self.rules.iter().find(|configured_rule| configured_rule.name() == name)
     }
 
     /// Parses the `[linter]` section
@@ -288,6 +566,27 @@ impl Config {
         &self.linter
     }
 
+    pub(crate) fn configure_diagnostic(&self, document_path: Option<&Path>, diagnostic: &mut Diagnostic) -> bool {
+        let Some(configured_rule) = self.linter.diagnostic_rule(*diagnostic.rule()) else {
+            return true;
+        };
+        if !configured_rule.enabled() {
+            return false;
+        }
+
+        if let Some(document_path) = document_path
+            && let Ok(relative_path) = document_path.strip_prefix(&self.workspace_path)
+            && configured_rule.excludes(&relative_path.to_string_lossy().replace(MAIN_SEPARATOR, "/"))
+        {
+            return false;
+        }
+
+        if let Some(severity) = configured_rule.severity() {
+            diagnostic.set_severity(*severity);
+        }
+        true
+    }
+
     /// Parses the content of the configuration file of the workspace rooted at `workspace_path` into the typed
     /// settings of each section
     fn parse(workspace_path: PathBuf, content: &str) -> Result<Self, String> {
@@ -352,6 +651,34 @@ mod tests {
     /// Parses configuration content for an arbitrary workspace, for the tests that only care about the settings
     fn parse(content: &str) -> Result<Config, String> {
         Config::parse(PathBuf::from("/workspace"), content)
+    }
+
+    #[test]
+    fn linter_excludes_match_ruby_fnmatch_semantics() {
+        for (pattern, path, expected) in [
+            ("a/**", "a/x", true),
+            ("a/**", "a/x/y", false),
+            ("a/**/b", "a/x/y/b", true),
+            ("a/**b", "a/xxb", true),
+            ("a***b", "axxxb", true),
+            (r"foo/\*.rb", "foo/*.rb", true),
+            (r"foo/\*.rb", "foo/x.rb", false),
+            ("[^a]", "b", true),
+            ("[z-a]", "z", true),
+            ("[z-a]", "m", false),
+            ("a{b}c", "abc", true),
+            ("a{b,{c,d}}e", "ade", true),
+            ("{", "{", false),
+            ("*", ".hidden", true),
+        ] {
+            let matches = FnmatchPattern::compile_all(pattern)
+                .iter()
+                .any(|pattern| pattern.matches(path));
+            assert_eq!(
+                expected, matches,
+                "unexpected match result for {pattern:?} and {path:?}"
+            );
+        }
     }
 
     #[test]

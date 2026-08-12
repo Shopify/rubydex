@@ -1,10 +1,12 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use line_index::LineIndex;
 use url::Url;
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::assert_mem_size;
+use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::model::ids::{ConstantReferenceId, DefinitionId, MethodReferenceId};
 
@@ -19,12 +21,18 @@ pub struct Document {
     constant_reference_ids: Vec<ConstantReferenceId>,
     diagnostics: Vec<Diagnostic>,
     content_hash: u64,
+    config: Arc<Config>,
 }
-assert_mem_size!(Document, 184);
+assert_mem_size!(Document, 192);
 
 impl Document {
     #[must_use]
     pub fn new(uri: String, source: &str) -> Self {
+        Self::new_with_config(uri, source, Arc::new(Config::default()))
+    }
+
+    #[must_use]
+    pub(crate) fn new_with_config(uri: String, source: &str, config: Arc<Config>) -> Self {
         Self {
             uri,
             line_index: LineIndex::new(source),
@@ -33,7 +41,12 @@ impl Document {
             constant_reference_ids: Vec::new(),
             diagnostics: Vec::new(),
             content_hash: xxh3_64(source.as_bytes()),
+            config,
         }
+    }
+
+    pub(crate) fn set_config(&mut self, config: Arc<Config>) {
+        self.config = config;
     }
 
     #[must_use]
@@ -88,7 +101,13 @@ impl Document {
         &self.diagnostics
     }
 
-    pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
+    pub fn add_diagnostic(&mut self, mut diagnostic: Diagnostic) {
+        if !self
+            .config
+            .configure_diagnostic(self.file_path().as_deref(), &mut diagnostic)
+        {
+            return;
+        }
         self.diagnostics.push(diagnostic);
     }
 

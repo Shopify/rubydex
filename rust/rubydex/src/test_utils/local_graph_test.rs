@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use super::normalize_indentation;
+use crate::config::Config;
 use crate::indexing::local_graph::LocalGraph;
 use crate::indexing::rbs_indexer::RBSIndexer;
 use crate::indexing::{IndexerBackend, LanguageId, build_local_graph};
@@ -26,7 +29,13 @@ impl LocalGraphTest {
     pub fn new_with_backend(uri: &str, source: &str, backend: IndexerBackend) -> Self {
         let uri = uri.to_string();
         let source = normalize_indentation(source);
-        let graph = build_local_graph(uri.clone(), &source, &LanguageId::Ruby, backend);
+        let graph = build_local_graph(
+            uri.clone(),
+            &source,
+            &LanguageId::Ruby,
+            backend,
+            Arc::new(Config::default()),
+        );
         Self { uri, source, graph }
     }
 

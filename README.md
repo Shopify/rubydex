@@ -167,6 +167,7 @@ Configure a rule in `rubydex.toml`:
 [linter.rules.<Rule name>]
 enabled = true
 exclude = ["path_to_skip/**"]
+severity = "warning"
 ```
 
 ### `rdx mcp`

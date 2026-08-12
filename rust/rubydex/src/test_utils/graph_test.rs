@@ -44,7 +44,13 @@ impl GraphTest {
     /// Indexes a Ruby source
     pub fn index_uri(&mut self, uri: &str, source: &str) {
         let source = normalize_indentation(source);
-        let local_graph = indexing::build_local_graph(uri.to_string(), &source, &LanguageId::Ruby, self.backend);
+        let local_graph = indexing::build_local_graph(
+            uri.to_string(),
+            &source,
+            &LanguageId::Ruby,
+            self.backend,
+            self.graph.config(),
+        );
         self.graph.consume_document_changes(local_graph);
     }
 

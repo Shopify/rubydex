@@ -329,9 +329,6 @@ class Rubydex::RelatedInformation
 end
 
 class Rubydex::Diagnostic
-  sig { returns(T::Array[String]) }
-  def self.graph_rule_names; end
-
   sig do
     params(
       rule: String,
@@ -427,6 +424,9 @@ end
 
 class Rubydex::Linter::Rule
   abstract!
+
+  sig { returns(T::Array[String]) }
+  def self.built_in_rules_names; end
 
   sig { returns(String) }
   def self.rule_name; end

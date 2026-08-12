@@ -117,6 +117,24 @@ class LinterTest < Minitest::Test
     end
   end
 
+  def test_rule_lists_built_in_rule_names
+    assert_equal(
+      [
+        "parse-error",
+        "parse-warning",
+        "dynamic-constant-reference",
+        "dynamic-singleton-definition",
+        "dynamic-ancestor",
+        "top-level-mixin-self",
+        "invalid-constant-visibility",
+        "invalid-method-visibility",
+        "undefined-method-visibility-target",
+        "undefined-constant-visibility-target",
+      ],
+      Rubydex::Linter::Rule.built_in_rules_names,
+    )
+  end
+
   def test_runner_builds_diagnostics_with_rule_severity_and_related_information
     result = Rubydex::Linter::Runner.new(Rubydex::Graph.new, rules: [WarningRule], config: linter_config).run
     diagnostic = result.diagnostics.fetch(0)
@@ -188,44 +206,67 @@ class LinterTest < Minitest::Test
     refute_predicate(result, :success?)
   end
 
-  def test_runner_drops_disabled_graph_diagnostics_by_rule_name
+  def test_graph_does_not_add_disabled_diagnostics
     with_context do |context|
       context.write!("workspace/warning.rb", "unused = true")
       context.write!("workspace/error.rb", "class Broken")
-      graph = Rubydex::Graph.configure_for_workspace(context.absolute_path_to("workspace"))
+      context.write!("workspace/rubydex.toml", <<~TOML)
+        [linter.rules.parse-warning]
+        enabled = false
+      TOML
+      config = Rubydex::Config.load(context.absolute_path_to("workspace"))
+      graph = Rubydex::Graph.new
+      graph.load_config(config)
       graph.index_all(context.glob("workspace/**/*.rb"))
-      config = configured_linter_config("parse-warning", enabled: false)
 
-      assert_equal(["parse-error", "parse-error", "parse-warning"], graph.diagnostics.map(&:rule).sort)
+      assert_equal(["parse-error", "parse-error"], graph.diagnostics.map(&:rule))
 
-      result = Rubydex::Linter::Runner.new(graph, rules: [], config:).run
+      result = Rubydex::Linter::Runner.new(graph, rules: [], config: config.linter).run
 
       assert_equal(["parse-error", "parse-error"], result.diagnostics.map(&:rule))
     end
   end
 
-  def test_runner_does_not_report_graph_diagnostics_from_excluded_paths
+  def test_graph_does_not_add_diagnostics_from_excluded_paths
     with_context do |context|
       context.write!("workspace/components/legacy/example.rb", "unused = true")
       context.write!("workspace/components/current/example.rb", "unused = true")
-      graph = Rubydex::Graph.configure_for_workspace(context.absolute_path_to("workspace"))
+      context.write!("workspace/rubydex.toml", <<~TOML)
+        [linter.rules.parse-warning]
+        exclude = ["components/legacy/**"]
+      TOML
+      config = Rubydex::Config.load(context.absolute_path_to("workspace"))
+      graph = Rubydex::Graph.new
+      graph.load_config(config)
       graph.index_all(context.glob("workspace/**/*.rb"))
-      config = configured_linter_config("parse-warning", exclude_patterns: ["components/legacy/**"])
 
-      expected_uris = [
-        context.uri_to("workspace/components/current/example.rb"),
-        context.uri_to("workspace/components/legacy/example.rb"),
-      ]
-      # Graph diagnostics are not disabled via linter configs and should still be created.
-      assert_equal(expected_uris.sort, graph.diagnostics.map { |diagnostic| diagnostic.location.uri }.sort)
+      expected_uri = context.uri_to("workspace/components/current/example.rb")
+      assert_equal([expected_uri], graph.diagnostics.map { |diagnostic| diagnostic.location.uri })
 
-      result = Rubydex::Linter::Runner.new(graph, rules: [], config:).run
+      result = Rubydex::Linter::Runner.new(graph, rules: [], config: config.linter).run
 
-      # But the excluded graph diagnostics will not appear in the linter results.
-      assert_equal(
-        [expected_uris.first],
-        result.diagnostics.map { |diagnostic| diagnostic.location.uri },
-      )
+      assert_equal([expected_uri], result.diagnostics.map { |diagnostic| diagnostic.location.uri })
+    end
+  end
+
+  def test_graph_applies_configured_diagnostic_severity
+    with_context do |context|
+      context.write!("workspace/example.rb", "unused = true")
+      context.write!("workspace/rubydex.toml", <<~TOML)
+        [linter.rules.parse-warning]
+        severity = "error"
+      TOML
+      config = Rubydex::Config.load(context.absolute_path_to("workspace"))
+      graph = Rubydex::Graph.new
+      graph.load_config(config)
+      graph.index_all(context.glob("workspace/**/*.rb"))
+
+      diagnostic = graph.diagnostics.fetch(0)
+      assert_equal("parse-warning", diagnostic.rule)
+      assert_equal(Rubydex::Severity::Error, diagnostic.severity)
+
+      result = Rubydex::Linter::Runner.new(graph, rules: [], config: config.linter).run
+      refute_predicate(result, :success?)
     end
   end
 
@@ -277,15 +318,16 @@ class LinterTest < Minitest::Test
     end
   end
 
-  def test_runner_filters_a_diagnostic_when_its_primary_location_matches_a_rule_exclude
+  def test_rule_does_not_add_a_diagnostic_from_an_excluded_path
     with_context do |context|
       context.write!("workspace/inside.rb")
       graph = Rubydex::Graph.configure_for_workspace(context.absolute_path_to("workspace"))
       config = configured_linter_config("ExcludedPrimaryRule", exclude_patterns: ["components/legacy/**"])
+      rule = ExcludedPrimaryRule.new(graph, config:)
 
-      result = Rubydex::Linter::Runner.new(graph, rules: [ExcludedPrimaryRule], config:).run
+      rule.lint
 
-      assert_empty(result.diagnostics)
+      assert_empty(rule.diagnostics)
     end
   end
 

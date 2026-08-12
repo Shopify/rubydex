@@ -34,6 +34,10 @@ impl Diagnostic {
         &self.severity
     }
 
+    pub(crate) fn set_severity(&mut self, severity: Severity) {
+        self.severity = severity;
+    }
+
     #[must_use]
     pub fn uri_id(&self) -> &UriId {
         &self.uri_id
@@ -70,26 +74,9 @@ pub enum Severity {
     Hint,
 }
 
-fn camel_to_snake(s: &str) -> String {
-    let mut snake = String::new();
-    for (i, ch) in s.chars().enumerate() {
-        if ch.is_uppercase() {
-            if i != 0 {
-                snake.push('-');
-            }
-            for lc in ch.to_lowercase() {
-                snake.push(lc);
-            }
-        } else {
-            snake.push(ch);
-        }
-    }
-    snake
-}
-
 macro_rules! rules {
     (
-        $( $variant:ident );* $(;)?
+        $( $variant:ident => $name:literal );* $(;)?
     ) => {
         #[derive(Debug, Copy, Clone, PartialEq, Eq)]
         pub enum Rule {
@@ -105,15 +92,20 @@ macro_rules! rules {
                     Self::$variant,
                 )*
             ];
+
+            #[must_use]
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $(
+                        Self::$variant => $name,
+                    )*
+                }
+            }
         }
 
         impl std::fmt::Display for Rule {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}", match self {
-                    $(
-                        Rule::$variant => camel_to_snake(stringify!($variant)),
-                    )*
-                })
+                f.write_str(self.name())
             }
         }
     }
@@ -121,18 +113,18 @@ macro_rules! rules {
 
 rules! {
     // Parsing
-    ParseError;
-    ParseWarning;
+    ParseError => "parse-error";
+    ParseWarning => "parse-warning";
 
     // Indexing
-    DynamicConstantReference;
-    DynamicSingletonDefinition;
-    DynamicAncestor;
-    TopLevelMixinSelf;
-    InvalidConstantVisibility;
-    InvalidMethodVisibility;
+    DynamicConstantReference => "dynamic-constant-reference";
+    DynamicSingletonDefinition => "dynamic-singleton-definition";
+    DynamicAncestor => "dynamic-ancestor";
+    TopLevelMixinSelf => "top-level-mixin-self";
+    InvalidConstantVisibility => "invalid-constant-visibility";
+    InvalidMethodVisibility => "invalid-method-visibility";
 
     // Resolution
-    UndefinedMethodVisibilityTarget;
-    UndefinedConstantVisibilityTarget;
+    UndefinedMethodVisibilityTarget => "undefined-method-visibility-target";
+    UndefinedConstantVisibilityTarget => "undefined-constant-visibility-target";
 }

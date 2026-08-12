@@ -1,5 +1,8 @@
 //! Visit the Ruby AST and create the definitions.
 
+use std::sync::Arc;
+
+use crate::config::Config;
 use crate::diagnostic::{Rule, Severity};
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
@@ -94,8 +97,13 @@ pub struct RubyIndexer<'a> {
 impl<'a> RubyIndexer<'a> {
     #[must_use]
     pub fn new(uri: String, source: &'a str) -> Self {
+        Self::new_with_config(uri, source, Arc::new(Config::default()))
+    }
+
+    #[must_use]
+    pub(crate) fn new_with_config(uri: String, source: &'a str, config: Arc<Config>) -> Self {
         let uri_id = UriId::from(&uri);
-        let local_graph = LocalGraph::new(uri_id, Document::new(uri, source));
+        let local_graph = LocalGraph::new(uri_id, Document::new_with_config(uri, source, config));
 
         Self {
             uri_id,
