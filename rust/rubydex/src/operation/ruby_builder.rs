@@ -845,7 +845,7 @@ impl<'a> RubyOperationBuilder<'a> {
                     }
 
                     Some((
-                        self.current_lexical_scope_name_id().unwrap(),
+                        self.current_owner_name_id().unwrap(),
                         Offset::from_prism_location(&arg.location()),
                     ))
                 } else if let Some(name_id) = self.index_constant_reference(&arg, false) {

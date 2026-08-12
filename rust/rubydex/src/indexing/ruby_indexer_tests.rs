@@ -5201,6 +5201,29 @@ mod dynamic_namespace_tests {
     }
 
     #[test]
+    fn index_extend_self_in_anonymous_module() {
+        let context = index_source({
+            "
+            Module.new do
+              extend self
+            end
+            "
+        });
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-3:4", Module, |anonymous_module| {
+            let extend = anonymous_module.mixins().first().unwrap();
+            let constant_reference = context
+                .graph()
+                .constant_references()
+                .get(extend.constant_reference_id())
+                .unwrap();
+
+            assert_eq!(anonymous_module.name_id(), constant_reference.name_id());
+        });
+    }
+
+    #[test]
     fn index_singleton_method_in_class_new() {
         let context = index_source({
             "
