@@ -1741,7 +1741,7 @@ class GraphTest < Minitest::Test
       assert_equal(2, result.length)
       refute_empty(result)
 
-      # Enumerable comes from `each`, which walks the same memoized rows.
+      # Enumerable comes from `each`. It walks the memoized rows once `rows` has built them.
       assert_equal(["Animal", "Dog"], result.map { |row| row["c.name"] })
       assert_same(result.rows, result.rows)
 
@@ -1751,6 +1751,202 @@ class GraphTest < Minitest::Test
       # The columns of a query that matched nothing are still known.
       assert_equal(["c.name"], empty.columns)
     end
+  end
+
+  def test_each_converts_only_the_rows_the_block_consumes
+    with_context do |context|
+      context.write!("zoo.rb", 300.times.map { |i| "class Klass#{i}; end" }.join("\n"))
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      query = Rubydex::Query.parse("MATCH (c:Class) WHERE c.name STARTS WITH 'Klass' RETURN c.name, c.kind")
+      assert_equal(300, query.run(graph).size)
+
+      # `first` breaks out of `each` after one row, so only that row becomes Ruby objects. `rows`
+      # converts all 300. Each run gets a fresh result, because `rows` memoizes its array.
+      early = count_allocations { query.run(graph).first }
+      every = count_allocations { query.run(graph).rows }
+
+      assert_operator(early * 10, :<, every, "expected `first` to convert one row, not all of them")
+    end
+  end
+
+  def test_each_without_a_block_returns_an_enumerator
+    with_context do |context|
+      context.write!("zoo.rb", "class Animal; end\nclass Dog < Animal; end\n")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      result = Rubydex::Query.parse(
+        "MATCH (c:Class) WHERE c.name IN ['Animal', 'Dog'] RETURN c.name ORDER BY c.name",
+      ).run(graph)
+
+      enumerator = result.each
+      assert_instance_of(Enumerator, enumerator)
+      assert_equal([{ "c.name" => "Animal" }, { "c.name" => "Dog" }], enumerator.to_a)
+    end
+  end
+
+  def test_each_stays_usable_after_a_break_and_after_a_raising_block
+    with_context do |context|
+      context.write!("zoo.rb", "class Animal; end\nclass Dog < Animal; end\n")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      result = Rubydex::Query.parse(
+        "MATCH (c:Class) WHERE c.name IN ['Animal', 'Dog'] RETURN c.name ORDER BY c.name",
+      ).run(graph)
+
+      # Both exits leave the walk through `rb_ensure`, which frees the row cursor.
+      assert_equal("Animal", result.each { |row| break row["c.name"] })
+      assert_raises(RuntimeError) { result.each { raise("boom") } }
+
+      assert_equal(["Animal", "Dog"], result.map { |row| row["c.name"] })
+      assert_equal(2, result.rows.length)
+    end
+  end
+
+  def test_rows_share_one_frozen_key_per_column
+    with_context do |context|
+      context.write!("zoo.rb", "class Animal; end\nclass Dog < Animal; end\n")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      rows = Rubydex::Query.parse(
+        "MATCH (c:Class) WHERE c.name IN ['Animal', 'Dog'] RETURN c.name, c.kind ORDER BY c.name",
+      ).run(graph).rows
+
+      key = rows.first.keys.first
+      assert_predicate(key, :frozen?)
+      assert_equal(Encoding::UTF_8, key.encoding)
+      # One key object per column serves every row, so a wide result allocates no key per cell.
+      assert_same(key, rows.last.keys.first)
+    end
+  end
+
+  def test_rows_raise_when_the_graph_no_longer_holds_a_returned_node
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///zoo.rb", "class Animal; end\nclass Dog < Animal; end\n", "ruby")
+    graph.resolve
+
+    result = Rubydex::Query.parse(
+      "MATCH (c:Class) WHERE c.name IN ['Animal', 'Dog'] RETURN c, c.name ORDER BY c.name",
+    ).run(graph)
+
+    graph.delete_document("file:///zoo.rb")
+    graph.resolve
+
+    # A String in place of the missing handle would change the column's type without a word.
+    error = assert_raises(Rubydex::StaleQueryResultError) { result.rows }
+    assert_match(/the graph no longer holds `Animal`/, error.message)
+    assert_kind_of(Rubydex::QueryError, error)
+  end
+
+  def test_each_raises_when_a_returned_node_disappears_during_the_walk
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///zoo.rb", "class Animal; end\nclass Dog < Animal; end\n", "ruby")
+    graph.resolve
+
+    result = Rubydex::Query.parse(
+      "MATCH (c:Class) WHERE c.name IN ['Animal', 'Dog'] RETURN c, c.name ORDER BY c.name",
+    ).run(graph)
+
+    seen = []
+
+    # The cursor holds no lock while the block runs, so the block may write to the graph. The next
+    # row then cannot build its handle, and the walk stops.
+    error = assert_raises(Rubydex::StaleQueryResultError) do
+      result.each do |row|
+        seen << row["c.name"]
+        graph.delete_document("file:///zoo.rb")
+        graph.resolve
+      end
+    end
+
+    assert_equal(["Animal"], seen)
+    assert_match(/the graph no longer holds `Dog`/, error.message)
+  end
+
+  def test_a_stale_result_still_renders_and_reports_its_shape
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///zoo.rb", "class Animal; end\nclass Dog < Animal; end\n", "ruby")
+    graph.resolve
+
+    result = Rubydex::Query.parse(
+      "MATCH (c:Class) WHERE c.name IN ['Animal', 'Dog'] RETURN c, c.name ORDER BY c.name",
+    ).run(graph)
+
+    graph.delete_document("file:///zoo.rb")
+    graph.resolve
+
+    # These read the executed result set and never touch the graph, so they keep working.
+    assert_equal(["c", "c.name"], result.columns)
+    assert_equal(2, result.size)
+    refute_empty(result)
+    assert_match(/Animal/, result.render(:json))
+  end
+
+  def test_rows_without_a_node_column_survive_a_graph_change
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///zoo.rb", "class Animal; end\nclass Dog < Animal; end\n", "ruby")
+    graph.resolve
+
+    result = Rubydex::Query.parse(
+      "MATCH (c:Class) WHERE c.name IN ['Animal', 'Dog'] RETURN c.name ORDER BY c.name",
+    ).run(graph)
+
+    graph.delete_document("file:///zoo.rb")
+    graph.resolve
+
+    # Scalar cells are pure snapshot data. They cannot go stale, so nothing raises.
+    assert_equal([{ "c.name" => "Animal" }, { "c.name" => "Dog" }], result.rows)
+  end
+
+  def test_rows_raise_when_a_node_inside_a_list_is_gone
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///zoo.rb", "class Animal; end\nclass Dog < Animal; end\n", "ruby")
+    graph.resolve
+
+    query = Rubydex::Query.parse("MATCH (c:Class {name: 'Animal'}) RETURN [c] AS boxed")
+    stale = query.run(graph)
+
+    # While the graph holds the node, the list carries a handle rather than a name.
+    assert_kind_of(Rubydex::Declaration, query.run(graph).rows.first["boxed"].first)
+
+    graph.delete_document("file:///zoo.rb")
+    graph.resolve
+
+    # A `List` cell frees the cells it already built, then reports the missing node like any other.
+    error = assert_raises(Rubydex::StaleQueryResultError) { stale.rows }
+    assert_match(/the graph no longer holds `Animal`/, error.message)
+  end
+
+  def test_rows_raise_when_a_node_inside_a_map_projection_is_gone
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///zoo.rb", "class Animal; end\nclass Dog < Animal; end\n", "ruby")
+    graph.resolve
+
+    query = Rubydex::Query.parse("MATCH (c:Class {name: 'Animal'}) RETURN c { .name, node: c } AS projection")
+    stale = query.run(graph)
+
+    projection = query.run(graph).rows.first["projection"]
+    assert_equal("Animal", projection["name"])
+    assert_kind_of(Rubydex::Declaration, projection["node"])
+
+    graph.delete_document("file:///zoo.rb")
+    graph.resolve
+
+    # A `Map` cell frees both the keys and the values it already built before it reports.
+    error = assert_raises(Rubydex::StaleQueryResultError) { stale.rows }
+    assert_match(/the graph no longer holds `Animal`/, error.message)
   end
 
   def test_render_returns_table_output
@@ -1957,5 +2153,14 @@ class GraphTest < Minitest::Test
 
   def graph_for(context)
     Rubydex::Graph.configure_for_workspace(context.absolute_path)
+  end
+
+  # Counts the objects that the block allocates. `GC.start` first, so that a pending collection does
+  # not land inside the measurement.
+  def count_allocations
+    GC.start
+    before = GC.stat(:total_allocated_objects)
+    yield
+    GC.stat(:total_allocated_objects) - before
   end
 end

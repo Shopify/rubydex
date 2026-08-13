@@ -637,6 +637,7 @@ class Rubydex::ConfigError < Rubydex::Error; end
 class Rubydex::QueryError < Rubydex::Error; end
 class Rubydex::QuerySyntaxError < Rubydex::QueryError; end
 class Rubydex::QueryExecutionError < Rubydex::QueryError; end
+class Rubydex::StaleQueryResultError < Rubydex::QueryError; end
 
 # The configuration of a workspace, parsed from its `rubydex.toml`. It carries both the settings that are global to
 # every built-in tool, such as the workspace being analyzed, and the typed settings of each tool's own section (e.g.
