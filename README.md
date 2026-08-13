@@ -114,7 +114,7 @@ Thread safety comes from an `RwLock` on the Rust side, **not** from Ruby's
 
 All built-in tools are experimental. These tools can change without deprecation warnings.
 
-### `rdx query`
+### Querying
 
 Rubydex exposes the indexed graph through a read-only subset of the
 [Cypher](https://opencypher.org/) query language. Only read clauses (`MATCH`,
@@ -153,27 +153,11 @@ puts result.render("json")
 puts Rubydex::Query.schema("table")
 ```
 
-### `rdx lint`
+### Linter
 
-Put rule files under `rubydex_linter/rules`. Each rule must inherit from `Rubydex::Linter::CustomRule`.
+See the [linter docs](docs/linter.md).
 
-Run the linter:
-
-```bash
-bundle exec rdx lint
-```
-
-Rubydex uses the bundle root, or the current directory when no bundle is available.
-
-Configure a rule in `rubydex.toml`:
-
-```toml
-[linter.rules.<Rule name>]
-enabled = true
-exclude = ["path_to_skip/**"]
-```
-
-### `rdx mcp`
+### MCP server
 
 Rubydex can run as an MCP (Model Context Protocol) server, enabling AI assistants
 like Claude to semantically query your Ruby codebase.
