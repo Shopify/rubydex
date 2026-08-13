@@ -6,6 +6,7 @@ require "helpers/context"
 require "json"
 require "mocha/minitest"
 require "rubydex/cli"
+require "rubydex/linter"
 
 # `cli.rb` loads the command files lazily, so that `rdx --version` pulls in nothing it does not
 # need. Load them here so the tests can refer to the command classes by constant regardless of the
@@ -19,6 +20,30 @@ Rubydex::CLI::Command.all
 class CLITest < Minitest::Test
   include Test::Helpers::WithCLI
   include Test::Helpers::WithContext
+
+  class CLITestProjectErrorRule < Rubydex::Linter::Rule
+    def severity = Rubydex::Severity::Error
+
+    def lint
+      declaration = graph["Foo"]
+      return unless declaration
+
+      definitions = declaration.definitions.sort_by(&:location).to_a
+      primary = definitions.shift
+      return unless primary
+
+      add_diagnostic(
+        "Foo is not allowed.",
+        diagnostic_location(primary),
+        related_information: definitions.map do |definition|
+          Rubydex::RelatedInformation.new(
+            "Foo is also defined here.",
+            diagnostic_location(definition),
+          )
+        end,
+      )
+    end
+  end
 
   def test_commands_are_discovered_from_subclasses
     commands = Rubydex::CLI::Command.all
@@ -249,17 +274,14 @@ class CLITest < Minitest::Test
     refute_stderr_includes(result, "Usage: rdx <command> [options]")
   end
 
-  def test_lint_reports_a_project_rule_diagnostic_with_related_information
+  def test_lint_reports_a_rule_diagnostic_with_related_information
     with_context do |context|
-      write_linter_rule(
-        context,
-        "CLITestProjectErrorRule",
-        path: "rubydex_linter/rules/nested/no_foo.rb",
-      )
       context.write!("app.rb", "class Foo; end\nclass Foo; end\n")
-      Gem.expects(:find_latest_files).never
+      Rubydex::Linter::RuleLoader.expects(:load)
+        .with(context.absolute_path)
+      Rubydex::Linter::Rule.stubs(:subclasses).returns([CLITestProjectErrorRule])
 
-      result = with_bundle_gemfile(nil) { rdx("lint", context.absolute_path) }
+      result = rdx("lint", context.absolute_path)
 
       refute_success_status(result)
       assert_stdout_includes(
@@ -281,49 +303,33 @@ class CLITest < Minitest::Test
       refute_stdout_includes(result, context.absolute_path)
       assert_stderr_includes(result, "Indexing workspace...")
       assert_stderr_includes(result, "Resolving graph...")
+      assert_stderr_includes(result, "Running 1 rule...")
     end
   end
 
   def test_lint_allows_a_clean_workspace
     with_context do |context|
-      write_linter_rule(context, "CLITestProjectCleanRule")
       context.write!("app.rb", "class Bar; end\n")
+      Rubydex::Linter::RuleLoader.expects(:load)
+        .with(context.absolute_path)
+      Rubydex::Linter::Rule.stubs(:subclasses).returns([CLITestProjectErrorRule])
 
-      result = with_bundle_gemfile(nil) { rdx("lint", context.absolute_path) }
+      result = rdx("lint", context.absolute_path)
 
       assert_success_status(result)
       assert_stdout_includes_pattern(result, /\d+ files inspected, no offenses detected/)
     end
   end
 
-  def test_lint_loads_rules_from_bundled_dependencies
+  def test_lint_allows_a_plain_workspace_without_project_rules
     with_context do |context|
-      rule_path = "fake_gem/lib/rubydex_linter/rules/no_foo.rb"
-      write_linter_rule(context, "CLITestDependencyErrorRule", path: rule_path)
-      context.write!("app.rb", "class Foo; end\n")
-      Gem.expects(:find_latest_files)
-        .with("rubydex_linter/rules/**/*.rb")
-        .returns([context.absolute_path_to(rule_path)])
+      context.write!("app.rb", "class App; end\n")
+      Rubydex::Linter::Rule.stubs(:subclasses).returns([Rubydex::Linter::Rules::RuleStructure])
 
-      result = with_bundle_gemfile(context.absolute_path_to("Gemfile")) do
-        rdx("lint", context.absolute_path)
-      end
+      result = rdx("lint", context.absolute_path)
 
-      refute_success_status(result)
-      assert_stdout_includes(result, "error: CLITestDependencyErrorRule: Foo is not allowed.")
-    end
-  end
-
-  def test_lint_requires_a_discovered_rule_before_indexing
-    with_context do |context|
-      context.write!("app.rb", "class Foo; end\n")
-
-      result = with_bundle_gemfile(nil) { rdx("lint", context.absolute_path) }
-
-      refute_success_status(result)
-      assert_empty_stdout(result)
-      assert_stderr_includes(result, "No Rubydex::Linter::Rule subclasses were loaded")
-      refute_stderr_includes(result, "Indexing workspace...")
+      assert_success_status(result)
+      assert_stdout_includes_pattern(result, /\d+ files inspected, no offenses detected/)
     end
   end
 
@@ -398,48 +404,6 @@ class CLITest < Minitest::Test
   end
 
   private
-
-  # Each in-process invocation loads a distinct named rule. Reopening the same class would not add
-  # a subclass, so the linter could not identify which rule came from that invocation.
-  #: (Test::Helpers::Context context, String class_name, ?path: String) -> void
-  def write_linter_rule(context, class_name, path: "rubydex_linter/rules/no_foo.rb")
-    context.write!(path, <<~RUBY)
-      # frozen_string_literal: true
-
-      class #{class_name} < Rubydex::Linter::Rule
-        def severity = Rubydex::Severity::Error
-
-        def lint
-          declaration = graph["Foo"]
-          return unless declaration
-
-          definitions = declaration.definitions.sort_by { |definition| definition.location }.to_a
-          primary = definitions.shift
-          return unless primary
-
-          add_diagnostic(
-            "Foo is not allowed.",
-            diagnostic_location(primary),
-            related_information: definitions.map do |definition|
-              Rubydex::RelatedInformation.new(
-                "Foo is also defined here.",
-                diagnostic_location(definition),
-              )
-            end,
-          )
-        end
-      end
-    RUBY
-  end
-
-  #: [R] (String?) { -> R } -> R
-  def with_bundle_gemfile(value)
-    previous = ENV["BUNDLE_GEMFILE"]
-    ENV["BUNDLE_GEMFILE"] = value
-    yield
-  ensure
-    ENV["BUNDLE_GEMFILE"] = previous
-  end
 
   #: (LoadError error) -> void
   def console_raising_on_require(error)

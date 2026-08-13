@@ -28,8 +28,11 @@ module Rubydex
           config = Rubydex::Config.load(workspace_path)
           warn_unknown_rules(config.linter, rules)
 
-          graph = build_graph($stderr, workspace_path:, config:, fail_on_index_errors: true)
-          result = Rubydex::Linter::Runner.new(graph, rules:, config: config.linter).run
+          graph = build_graph($stderr, workspace_path:, config:)
+          runner = Rubydex::Linter::Runner.new(graph, rules:, config: config.linter)
+          rule_count = runner.rules.size
+          $stderr.puts("Running #{rule_count} #{pluralize("rule", rule_count)}...")
+          result = runner.run
           if result.diagnostics.empty?
             print_summary(graph.documents.count, result.diagnostics)
             return
@@ -57,6 +60,7 @@ module Rubydex
         #: (String workspace_path) -> Array[singleton(Rubydex::Linter::Rule)]
         def load_linter_rules(workspace_path)
           Rubydex::Linter::RuleLoader.load(workspace_path)
+          Rubydex::Linter::Rule.subclasses
         rescue Rubydex::Linter::RuleLoadError => error
           abort(error.message)
         end

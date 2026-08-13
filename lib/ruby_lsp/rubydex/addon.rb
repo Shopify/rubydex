@@ -122,6 +122,8 @@ module Rubydex
         def initialize(global_state)
           @graph = global_state.graph #: ::Rubydex::Graph
           @workspace_path = global_state.workspace_path #: String
+          ::Rubydex::Linter::RuleLoader.load(@workspace_path)
+          @rules = ::Rubydex::Linter::Rule.subclasses #: Array[singleton(::Rubydex::Linter::Rule)]
           @runner = build_runner #: ::Rubydex::Linter::Runner
 
           @current_diagnostics = {} #: Hash[String, Array[::RubyLsp::Interface::Diagnostic]]
@@ -165,8 +167,7 @@ module Rubydex
         #: () -> ::Rubydex::Linter::Runner
         def build_runner
           config = ::Rubydex::Config.load(@workspace_path)
-          rules = ::Rubydex::Linter::RuleLoader.load(@workspace_path)
-          ::Rubydex::Linter::Runner.new(@graph, rules:, config: config.linter)
+          ::Rubydex::Linter::Runner.new(@graph, rules: @rules, config: config.linter)
         end
 
         #: (::Rubydex::Diagnostic) -> ::RubyLsp::Interface::Diagnostic
