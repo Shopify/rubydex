@@ -15,7 +15,7 @@ module Rubydex
       def initialize(graph, rules:, config:)
         @graph = graph
         @config = config
-        @rules = rules.select { |rule| config.rule_enabled?(rule) }.sort_by { |rule| rule.name.to_s }
+        @rules = rules.select { |rule| config.rule_enabled?(rule) }.sort_by(&:rule_name)
         @dependency_paths = Gem.path #: Array[String]
       end
 

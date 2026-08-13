@@ -2,23 +2,9 @@
 
 module Rubydex
   module Linter
-    # Base class for semantic lint rules.
+    # Base class for semantic lint rules, which collect their diagnostics by walking a resolved graph.
     # @abstract
-    class Rule
-      class << self
-        #: () -> String
-        def rule_name
-          name #: as !nil
-            .split("::").last #: as !nil
-        end
-
-        # @abstract
-        #: () -> singleton(Severity::Base)
-        def default_severity
-          raise NotImplementedError, "Subclasses must implement the default_severity method"
-        end
-      end
-
+    class Rule < RuleDefinition
       #: Graph
       attr_reader :graph
 
@@ -30,6 +16,7 @@ module Rubydex
 
       #: (Graph, config: LinterConfig) -> void
       def initialize(graph, config:)
+        super()
         @graph = graph
         @config = config
         @diagnostics = [] #: Array[Diagnostic]

@@ -15,18 +15,18 @@ module Rubydex
       freeze
     end
 
-    #: (singleton(Linter::Rule) rule_class) -> bool
+    #: (singleton(RuleDefinition) rule_class) -> bool
     def rule_enabled?(rule_class)
       rule = @rules[rule_class.rule_name]
       !rule || rule.enabled?
     end
 
-    #: (singleton(Linter::Rule) rule_class) -> Array[String]
+    #: (singleton(RuleDefinition) rule_class) -> Array[String]
     def excludes_for(rule_class)
       @rules[rule_class.rule_name]&.exclude_patterns || []
     end
 
-    #: (singleton(Linter::Rule) rule_class) -> singleton(Severity::Base)
+    #: (singleton(RuleDefinition) rule_class) -> singleton(Severity::Base)
     def severity_for(rule_class)
       @rules[rule_class.rule_name]&.severity || rule_class.default_severity
     end
