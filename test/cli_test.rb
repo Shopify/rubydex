@@ -22,7 +22,9 @@ class CLITest < Minitest::Test
   include Test::Helpers::WithContext
 
   class CLITestProjectErrorRule < Rubydex::Linter::Rule
-    def severity = Rubydex::Severity::Error
+    class << self
+      def default_severity = Rubydex::Severity::Error
+    end
 
     def lint
       declaration = graph["Foo"]

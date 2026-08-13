@@ -426,8 +426,15 @@ end
 class Rubydex::Linter::Rule
   abstract!
 
-  sig { returns(String) }
-  def self.rule_name; end
+  class << self
+    abstract!
+
+    sig { returns(String) }
+    def rule_name; end
+
+    sig { abstract.returns(T.class_of(Rubydex::Severity::Base)) }
+    def default_severity; end
+  end
 
   sig { params(graph: Rubydex::Graph, config: Rubydex::LinterConfig).void }
   def initialize(graph, config:); end
@@ -460,9 +467,6 @@ class Rubydex::Linter::Rule
 
   sig { returns(String) }
   def rule_name; end
-
-  sig { abstract.returns(T.class_of(Rubydex::Severity::Base)) }
-  def severity; end
 
   sig { returns(T.class_of(Rubydex::Severity::Base)) }
   def verified_severity; end
@@ -505,10 +509,12 @@ class Rubydex::Linter::Rules::RuleStructure < Rubydex::Linter::Rule
   RULE_FILE_PATTERNS = T.let(T.unsafe(nil), T::Array[String])
   TEST_FILE_PATTERNS = T.let(T.unsafe(nil), T::Array[String])
 
-  sig { returns(T.class_of(Rubydex::Severity::Base)) }
-  def severity; end
+  class << self
+    sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
+    def default_severity; end
+  end
 
-  sig { void }
+  sig { override.void }
   def lint; end
 end
 
@@ -674,13 +680,8 @@ class Rubydex::LinterConfig
   sig { params(rule_class: T.class_of(Rubydex::Linter::Rule)).returns(T::Array[String]) }
   def excludes_for(rule_class); end
 
-  sig do
-    params(
-      rule_class: T.class_of(Rubydex::Linter::Rule),
-      default: T.class_of(Rubydex::Severity::Base),
-    ).returns(T.class_of(Rubydex::Severity::Base))
-  end
-  def severity_for(rule_class, default:); end
+  sig { params(rule_class: T.class_of(Rubydex::Linter::Rule)).returns(T.class_of(Rubydex::Severity::Base)) }
+  def severity_for(rule_class); end
 end
 
 # The settings of a single linter rule, read from a `[linter.rules.RuleName]` table.
