@@ -18,7 +18,8 @@
 // `Graph` (in `schema`) and the static schema description (in `schema_info`).
 //
 // `Query` is the opaque parsed-query object: callers can `parse` a query string once (failing fast
-// on syntax errors), then `run_parsed` it against a graph that was built afterwards.
+// on syntax errors), `execute` it against a graph that was built afterwards, and `render` the
+// resulting [`ResultSet`] without running the query again.
 pub use cypher_parser::{CypherError, CypherValue, OutputFormat, Query, ResultSet, execute, parse};
 
 pub mod schema;
@@ -35,15 +36,11 @@ pub fn run_query(graph: &Graph, query: &str, output_format: OutputFormat) -> Res
     cypher_parser::run_query(graph, query, output_format)
 }
 
-/// Executes an already-parsed [`Query`] against the graph and formats the result. Pair with
-/// [`parse`] to validate a query before building the graph.
-///
-/// # Errors
-///
-/// Returns a [`CypherError`] if the query cannot be executed.
-pub fn run_parsed(graph: &Graph, query: &Query, output_format: OutputFormat) -> Result<String, CypherError> {
-    let result = cypher_parser::execute(graph, query)?;
-    Ok(cypher_parser::format::format(&result, output_format))
+/// Renders an already-executed [`ResultSet`] in the requested format. Pair with [`execute`] to run a
+/// parsed query once and render its result set as often as needed.
+#[must_use]
+pub fn render(result: &ResultSet, output_format: OutputFormat) -> String {
+    cypher_parser::format::format(result, output_format)
 }
 
 /// Returns a description of the queryable schema (node labels, relationship types, and properties)

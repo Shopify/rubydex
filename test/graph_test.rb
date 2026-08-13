@@ -1610,8 +1610,9 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      rows = query.run(graph)
-      assert_equal([{ "p.name" => "Animal" }], rows)
+      result = query.run(graph)
+      assert_instance_of(Rubydex::Query::Result, result)
+      assert_equal([{ "p.name" => "Animal" }], result.rows)
     end
   end
 
@@ -1625,7 +1626,7 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      rows = query.run(graph)
+      rows = query.run(graph).rows
       assert_equal(1, rows.length)
       node = rows.first["c"]
       assert_kind_of(Rubydex::Declaration, node)
@@ -1645,7 +1646,7 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      assert_equal([{ "p.name" => "Animal", "subclasses" => 2 }], query.run(graph))
+      assert_equal([{ "p.name" => "Animal", "subclasses" => 2 }], query.run(graph).rows)
     end
   end
 
@@ -1659,7 +1660,7 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      rows = query.run(graph)
+      rows = query.run(graph).rows
       assert_equal(1, rows.length)
       projection = rows.first.values.first
       assert_kind_of(Hash, projection)
@@ -1684,13 +1685,31 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      assert_equal([{ "n.name" => "Animal" }, { "n.name" => "Walkable" }], query.run(graph))
+      assert_equal([{ "n.name" => "Animal" }, { "n.name" => "Walkable" }], query.run(graph).rows)
     end
   end
 
   def test_parse_raises_on_syntax_error
-    error = assert_raises(ArgumentError) { Rubydex::Query.parse("MATCH (c RETURN c") }
+    error = assert_raises(Rubydex::QuerySyntaxError) { Rubydex::Query.parse("MATCH (c RETURN c") }
     assert_match(/Cypher syntax error/, error.message)
+    assert_kind_of(Rubydex::QueryError, error)
+  end
+
+  def test_run_raises_on_execution_error
+    with_context do |context|
+      context.write!("zoo.rb", "class Dog; end\n")
+
+      # An unknown relationship type parses, but the executor rejects it against the graph.
+      query = Rubydex::Query.parse("MATCH (a)-[:BOGUS]->(b) RETURN a")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      error = assert_raises(Rubydex::QueryExecutionError) { query.run(graph) }
+      assert_match(/Cypher execution error/, error.message)
+      assert_kind_of(Rubydex::QueryError, error)
+    end
   end
 
   def test_parsed_query_reusable_across_graphs
@@ -1702,7 +1721,35 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      assert_equal([{ "c.name" => "Dog" }], query.run(graph))
+      assert_equal([{ "c.name" => "Dog" }], query.run(graph).rows)
+    end
+  end
+
+  def test_result_reports_columns_rows_and_emptiness
+    with_context do |context|
+      context.write!("zoo.rb", "class Animal; end\nclass Dog < Animal; end\n")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      result = Rubydex::Query.parse(
+        "MATCH (c:Class) WHERE c.name IN ['Animal', 'Dog'] RETURN c.name, c.kind ORDER BY c.name",
+      ).run(graph)
+      assert_equal(["c.name", "c.kind"], result.columns)
+      assert_equal(2, result.size)
+      assert_equal(2, result.length)
+      refute_empty(result)
+
+      # Enumerable comes from `each`, which walks the same memoized rows.
+      assert_equal(["Animal", "Dog"], result.map { |row| row["c.name"] })
+      assert_same(result.rows, result.rows)
+
+      empty = Rubydex::Query.parse("MATCH (c:Class {name: 'Nope'}) RETURN c.name").run(graph)
+      assert_empty(empty)
+      assert_equal(0, empty.size)
+      # The columns of a query that matched nothing are still known.
+      assert_equal(["c.name"], empty.columns)
     end
   end
 
@@ -1719,7 +1766,7 @@ class GraphTest < Minitest::Test
       graph.resolve
 
       query = Rubydex::Query.parse("MATCH (c:Class)-[:HAS_PARENT]->(p:Class) WHERE p.name = 'Animal' RETURN c.name ORDER BY c.name")
-      output = query.render(graph)
+      output = query.run(graph).render
 
       assert_match(/c\.name/, output)
       assert_match(/Cat/, output)
@@ -1736,9 +1783,11 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      query = Rubydex::Query.parse("MATCH (c:Class {name: 'Dog'}) RETURN c.name")
-      assert_equal("[{\"c.name\":\"Dog\"}]", query.render(graph, :json))
-      assert_equal("[{\"c.name\":\"Dog\"}]", query.render(graph, "json"))
+      # One execution renders as many times, and in as many formats, as the caller wants.
+      result = Rubydex::Query.parse("MATCH (c:Class {name: 'Dog'}) RETURN c.name").run(graph)
+      assert_equal("[{\"c.name\":\"Dog\"}]", result.render(:json))
+      assert_equal("[{\"c.name\":\"Dog\"}]", result.render("json"))
+      assert_match(/1 row/, result.render)
     end
   end
 
@@ -1750,8 +1799,8 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      query = Rubydex::Query.parse("MATCH (c:Class) RETURN c.name")
-      error = assert_raises(ArgumentError) { query.render(graph, :yaml) }
+      result = Rubydex::Query.parse("MATCH (c:Class) RETURN c.name").run(graph)
+      error = assert_raises(ArgumentError) { result.render(:yaml) }
       assert_match(/unknown query format/, error.message)
     end
   end

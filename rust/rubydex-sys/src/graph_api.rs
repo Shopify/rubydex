@@ -1,7 +1,6 @@
 //! This file provides the C API for the Graph object
 
 use crate::config_api::ConfigPointer;
-use crate::cypher_api::CQueryResult;
 use crate::declaration_api::CDeclaration;
 use crate::declaration_api::DeclarationsIter;
 use crate::declaration_api::decl_id_from_char_ptr;
@@ -17,7 +16,6 @@ use rubydex::model::ids::{DeclarationId, NameId, UriId, declaration_id_from_look
 use rubydex::model::keywords;
 use rubydex::model::name::NameRef;
 use rubydex::model::visibility::Visibility;
-use rubydex::query::cypher::{self, OutputFormat};
 use rubydex::query::{CompletionCandidate, CompletionContext, CompletionReceiver};
 use rubydex::resolution::Resolver;
 use rubydex::{indexing, integrity, listing, query};
@@ -1024,46 +1022,6 @@ pub unsafe extern "C" fn rdx_keyword_get(name: *const c_char) -> *const CKeyword
         }
         None => ptr::null(),
     }
-}
-
-/// Executes a previously parsed query (from `rdx_cypher_parse`) against the graph and returns the
-/// formatted output or an error message. `format` must be `"table"` or `"json"`.
-///
-/// # Safety
-///
-/// - `query` must be a valid pointer returned by `rdx_cypher_parse`.
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
-/// - `format` must be a valid, null-terminated UTF-8 string.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_query_run(
-    query: *const c_void,
-    pointer: GraphPointer,
-    format: *const c_char,
-) -> CQueryResult {
-    if query.is_null() {
-        return CQueryResult::error("query is null");
-    }
-
-    let Ok(format_str) = (unsafe { utils::convert_char_ptr_to_string(format) }) else {
-        return CQueryResult::error("format is not valid UTF-8");
-    };
-
-    let output_format = match format_str.as_str() {
-        "table" => OutputFormat::Table,
-        "json" => OutputFormat::Json,
-        other => {
-            return CQueryResult::error(&format!("unknown query format `{other}` (expected `table` or `json`)"));
-        }
-    };
-
-    let parsed = unsafe { &*query.cast::<cypher::Query>() };
-
-    with_graph(pointer, |graph| {
-        match cypher::run_parsed(graph, parsed, output_format) {
-            Ok(output) => CQueryResult::success(&output),
-            Err(error) => CQueryResult::error(&error.to_string()),
-        }
-    })
 }
 
 #[repr(u8)]

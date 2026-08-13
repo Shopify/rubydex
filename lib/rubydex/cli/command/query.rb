@@ -47,7 +47,13 @@ module Rubydex
           # Progress goes to stderr so stdout carries only the result (e.g. for piping a query's JSON).
           graph = build_graph($stderr)
 
-          render(parsed, graph, format)
+          begin
+            result = parsed.run(graph)
+          rescue Rubydex::QueryExecutionError => e
+            abort(e.message)
+          end
+
+          print(result.render(format))
         end
 
         private
@@ -55,14 +61,7 @@ module Rubydex
         #: (String query) -> Rubydex::Query
         def parse_query(query)
           Rubydex::Query.parse(query)
-        rescue ArgumentError => e
-          abort(e.message)
-        end
-
-        #: (Rubydex::Query parsed, Rubydex::Graph graph, String format) -> void
-        def render(parsed, graph, format)
-          print(parsed.render(graph, format))
-        rescue ArgumentError => e
+        rescue Rubydex::QuerySyntaxError => e
           abort(e.message)
         end
       end
