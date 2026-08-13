@@ -968,7 +968,7 @@ mod class_and_module_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            ["dynamic-constant-reference: Dynamic constant reference (1:7-1:10)"],
+            ["DynamicConstantReference: Dynamic constant reference (1:7-1:10)"],
             severity: Severity::Information
         );
         assert!(context.graph().definitions().is_empty());
@@ -1073,7 +1073,7 @@ mod class_and_module_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            ["dynamic-constant-reference: Dynamic constant reference (1:8-1:11)"]
+            ["DynamicConstantReference: Dynamic constant reference (1:8-1:11)"]
         );
         assert!(context.graph().definitions().is_empty());
     }
@@ -1175,7 +1175,7 @@ mod method_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            ["dynamic-singleton-definition: Dynamic receiver for singleton method definition (1:1-1:17)"]
+            ["DynamicSingletonDefinition: Dynamic receiver for singleton method definition (1:1-1:17)"]
         );
         assert_eq!(context.graph().definitions().len(), 0);
         assert_method_references_eq!(&context, ["foo"]);
@@ -1418,7 +1418,7 @@ mod singleton_class_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            ["dynamic-singleton-definition: Dynamic singleton class definition (1:1-3:4)"]
+            ["DynamicSingletonDefinition: Dynamic singleton class definition (1:1-3:4)"]
         );
         assert_eq!(context.graph().definitions().len(), 0);
     }
@@ -1802,11 +1802,11 @@ mod visibility_tests {
         assert_local_diagnostics_eq!(
             &context,
             vec![
-                "invalid-constant-visibility: `private_constant` called at top level (1:1-1:22)",
-                "invalid-constant-visibility: `private_constant` called at top level (2:1-2:27)",
-                "invalid-constant-visibility: Dynamic receiver for `private_constant` (3:1-3:4)",
-                "invalid-constant-visibility: `private_constant` called with a non-literal argument (6:20-6:29)",
-                "invalid-constant-visibility: `private_constant` called with a non-literal argument (6:31-6:42)",
+                "InvalidConstantVisibility: `private_constant` called at top level (1:1-1:22)",
+                "InvalidConstantVisibility: `private_constant` called at top level (2:1-2:27)",
+                "InvalidConstantVisibility: Dynamic receiver for `private_constant` (3:1-3:4)",
+                "InvalidConstantVisibility: `private_constant` called with a non-literal argument (6:20-6:29)",
+                "InvalidConstantVisibility: `private_constant` called with a non-literal argument (6:31-6:42)",
             ],
             severity: Severity::Warning
         );
@@ -1840,11 +1840,11 @@ mod visibility_tests {
         assert_local_diagnostics_eq!(
             &context,
             vec![
-                "invalid-constant-visibility: `public_constant` called at top level (1:1-1:21)",
-                "invalid-constant-visibility: `public_constant` called at top level (2:1-2:26)",
-                "invalid-constant-visibility: Dynamic receiver for `public_constant` (3:1-3:4)",
-                "invalid-constant-visibility: `public_constant` called with a non-literal argument (6:19-6:28)",
-                "invalid-constant-visibility: `public_constant` called with a non-literal argument (6:30-6:41)",
+                "InvalidConstantVisibility: `public_constant` called at top level (1:1-1:21)",
+                "InvalidConstantVisibility: `public_constant` called at top level (2:1-2:26)",
+                "InvalidConstantVisibility: Dynamic receiver for `public_constant` (3:1-3:4)",
+                "InvalidConstantVisibility: `public_constant` called with a non-literal argument (6:19-6:28)",
+                "InvalidConstantVisibility: `public_constant` called with a non-literal argument (6:30-6:41)",
             ]
         );
 
@@ -1921,7 +1921,7 @@ mod visibility_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: `private` called with a non-literal argument (4:17-4:27)"]
+            vec!["InvalidMethodVisibility: `private` called with a non-literal argument (4:17-4:27)"]
         );
 
         // :foo is a literal arg, so visibility is still applied
@@ -1947,7 +1947,7 @@ mod visibility_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: `private` cannot be called with an explicit receiver (4:3-4:19)"]
+            vec!["InvalidMethodVisibility: `private` cannot be called with an explicit receiver (4:3-4:19)"]
         );
 
         for def in context.graph().definitions().values() {
@@ -1972,7 +1972,7 @@ mod visibility_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: `private` called with a non-literal argument (4:11-4:21)"]
+            vec!["InvalidMethodVisibility: `private` called with a non-literal argument (4:11-4:21)"]
         );
 
         // No MethodVisibilityDefinition created
@@ -1996,7 +1996,7 @@ mod visibility_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: `private` called with a non-literal argument (2:11-2:23)"]
+            vec!["InvalidMethodVisibility: `private` called with a non-literal argument (2:11-2:23)"]
         );
 
         // No MethodVisibilityDefinition created
@@ -2020,7 +2020,7 @@ mod visibility_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: `private` called with a non-literal argument (2:11-2:35)"]
+            vec!["InvalidMethodVisibility: `private` called with a non-literal argument (2:11-2:35)"]
         );
 
         // No MethodVisibilityDefinition or AttrReader created from that call
@@ -2063,9 +2063,7 @@ mod visibility_tests {
         // attr_reader(:foo) returns an array in multi-arg context, invalid for `private`
         assert_local_diagnostics_eq!(
             &context,
-            vec![
-                "invalid-method-visibility: `private` with `attr_*` is only supported as a single argument (2:11-2:28)"
-            ]
+            vec!["InvalidMethodVisibility: `private` with `attr_*` is only supported as a single argument (2:11-2:28)"]
         );
 
         // foo reader still defined via side effects, but public
@@ -2128,7 +2126,7 @@ mod visibility_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: `module_function` can only be used in modules (4:3-4:23)"]
+            vec!["InvalidMethodVisibility: `module_function` can only be used in modules (4:3-4:23)"]
         );
 
         for def in context.graph().definitions().values() {
@@ -2200,8 +2198,8 @@ mod visibility_tests {
         assert_local_diagnostics_eq!(
             &context,
             vec![
-                "invalid-method-visibility: `private` called with a non-literal argument (2:25-2:32)",
-                "invalid-method-visibility: `private` called with a non-literal argument (3:11-3:18)",
+                "InvalidMethodVisibility: `private` called with a non-literal argument (2:25-2:32)",
+                "InvalidMethodVisibility: `private` called with a non-literal argument (3:11-3:18)",
             ]
         );
 
@@ -2231,8 +2229,8 @@ mod visibility_tests {
         assert_local_diagnostics_eq!(
             &context,
             vec![
-                "invalid-method-visibility: `private` called with a non-literal argument (2:11-2:18)",
-                "invalid-method-visibility: `private` called with a non-literal argument (2:20-2:27)",
+                "InvalidMethodVisibility: `private` called with a non-literal argument (2:11-2:18)",
+                "InvalidMethodVisibility: `private` called with a non-literal argument (2:20-2:27)",
             ]
         );
 
@@ -2252,7 +2250,7 @@ mod visibility_tests {
         // module_function in a class is always invalid regardless of args
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: `module_function` can only be used in modules (2:3-2:37)"]
+            vec!["InvalidMethodVisibility: `module_function` can only be used in modules (2:3-2:37)"]
         );
 
         for def in context.graph().definitions().values() {
@@ -2338,11 +2336,11 @@ mod visibility_tests {
         assert_local_diagnostics_eq!(
             &context,
             vec![
-                "invalid-method-visibility: `private_class_method` called at top level (1:1-1:34)",
-                "invalid-method-visibility: `private_class_method` called at top level (2:1-2:39)",
-                "invalid-method-visibility: `private_class_method` called with a non-literal argument (6:24-6:35)",
-                "invalid-method-visibility: `private_class_method` does not accept `attr_*` arguments (8:24-8:41)",
-                "invalid-method-visibility: `private_class_method` requires a singleton method definition (9:24-9:39)",
+                "InvalidMethodVisibility: `private_class_method` called at top level (1:1-1:34)",
+                "InvalidMethodVisibility: `private_class_method` called at top level (2:1-2:39)",
+                "InvalidMethodVisibility: `private_class_method` called with a non-literal argument (6:24-6:35)",
+                "InvalidMethodVisibility: `private_class_method` does not accept `attr_*` arguments (8:24-8:41)",
+                "InvalidMethodVisibility: `private_class_method` requires a singleton method definition (9:24-9:39)",
             ],
             severity: Severity::Warning
         );
@@ -2378,7 +2376,7 @@ mod visibility_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: `private_class_method` called with a non-literal argument (5:28-5:40)"]
+            vec!["InvalidMethodVisibility: `private_class_method` called with a non-literal argument (5:28-5:40)"]
         );
 
         assert_definition_at!(&context, "5:25-5:26", MethodVisibility, |def| {
@@ -2399,7 +2397,7 @@ mod visibility_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: `private_class_method` called at top level (1:1-1:32)"]
+            vec!["InvalidMethodVisibility: `private_class_method` called at top level (1:1-1:32)"]
         );
         assert_constant_references_eq!(&context, ["NESTED_REF"]);
     }
@@ -2484,7 +2482,7 @@ mod visibility_tests {
         assert_local_diagnostics_eq!(
             &context,
             vec![
-                "invalid-method-visibility: `private_class_method` array element must be a Symbol, String, or method definition (5:32-5:42)"
+                "InvalidMethodVisibility: `private_class_method` array element must be a Symbol, String, or method definition (5:32-5:42)"
             ]
         );
 
@@ -2512,9 +2510,7 @@ mod visibility_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec![
-                "invalid-method-visibility: `private_class_method` requires a singleton method definition (2:25-2:49)"
-            ]
+            vec!["InvalidMethodVisibility: `private_class_method` requires a singleton method definition (2:25-2:49)"]
         );
 
         for def in context.graph().definitions().values() {
@@ -2546,7 +2542,7 @@ mod visibility_tests {
         assert_local_diagnostics_eq!(
             &context,
             vec![
-                "invalid-method-visibility: `private_class_method` array argument must be the only argument (5:24-5:28)"
+                "InvalidMethodVisibility: `private_class_method` array argument must be the only argument (5:24-5:28)"
             ]
         );
 
@@ -2849,8 +2845,8 @@ mod constant_reference_tests {
         assert_local_diagnostics_eq!(
             &context,
             [
-                "dynamic-constant-reference: Dynamic constant reference (3:6-3:14)",
-                "parse-warning: assigned but unused variable - foo (5:1-5:4)",
+                "DynamicConstantReference: Dynamic constant reference (3:6-3:14)",
+                "ParseWarning: assigned but unused variable - foo (5:1-5:4)",
             ]
         );
 
@@ -3033,7 +3029,7 @@ mod method_reference_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            ["parse-error: unexpected ... when the parent method is not forwarding (31:5-31:8)"]
+            ["ParseError: unexpected ... when the parent method is not forwarding (31:5-31:8)"]
         );
 
         assert_method_references_eq!(
@@ -3119,18 +3115,18 @@ mod method_reference_tests {
         assert_local_diagnostics_eq!(
             &context,
             [
-                "parse-warning: possibly useless use of != in void context (1:1-1:7)",
-                "parse-warning: possibly useless use of % in void context (2:1-2:6)",
-                "parse-warning: possibly useless use of & in void context (3:1-3:6)",
-                "parse-warning: possibly useless use of * in void context (5:1-5:6)",
-                "parse-warning: possibly useless use of ** in void context (6:1-6:7)",
-                "parse-warning: possibly useless use of + in void context (7:1-7:6)",
-                "parse-warning: possibly useless use of - in void context (8:1-8:6)",
-                "parse-warning: possibly useless use of / in void context (9:1-9:6)",
-                "parse-warning: possibly useless use of == in void context (11:1-11:7)",
-                "parse-warning: possibly useless use of ^ in void context (14:1-14:6)",
-                "parse-warning: possibly useless use of | in void context (15:1-15:6)",
-                "parse-warning: possibly useless use of <=> in void context (17:1-17:8)"
+                "ParseWarning: possibly useless use of != in void context (1:1-1:7)",
+                "ParseWarning: possibly useless use of % in void context (2:1-2:6)",
+                "ParseWarning: possibly useless use of & in void context (3:1-3:6)",
+                "ParseWarning: possibly useless use of * in void context (5:1-5:6)",
+                "ParseWarning: possibly useless use of ** in void context (6:1-6:7)",
+                "ParseWarning: possibly useless use of + in void context (7:1-7:6)",
+                "ParseWarning: possibly useless use of - in void context (8:1-8:6)",
+                "ParseWarning: possibly useless use of / in void context (9:1-9:6)",
+                "ParseWarning: possibly useless use of == in void context (11:1-11:7)",
+                "ParseWarning: possibly useless use of ^ in void context (14:1-14:6)",
+                "ParseWarning: possibly useless use of | in void context (15:1-15:6)",
+                "ParseWarning: possibly useless use of <=> in void context (17:1-17:8)"
             ]
         );
 
@@ -3152,7 +3148,7 @@ mod method_reference_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            ["parse-warning: possibly useless use of < in void context (1:1-1:6)"]
+            ["ParseWarning: possibly useless use of < in void context (1:1-1:6)"]
         );
 
         assert_method_references_eq!(&context, ["x", "<", "<=>", "y"]);
@@ -3168,7 +3164,7 @@ mod method_reference_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            ["parse-warning: possibly useless use of <= in void context (1:1-1:7)"]
+            ["ParseWarning: possibly useless use of <= in void context (1:1-1:7)"]
         );
 
         assert_method_references_eq!(&context, ["x", "<=", "<=>", "y"]);
@@ -3184,7 +3180,7 @@ mod method_reference_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            ["parse-warning: possibly useless use of > in void context (1:1-1:6)"]
+            ["ParseWarning: possibly useless use of > in void context (1:1-1:6)"]
         );
 
         assert_method_references_eq!(&context, ["x", "<=>", ">", "y"]);
@@ -3200,7 +3196,7 @@ mod method_reference_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            ["parse-warning: possibly useless use of >= in void context (1:1-1:7)"]
+            ["ParseWarning: possibly useless use of >= in void context (1:1-1:7)"]
         );
 
         assert_method_references_eq!(&context, ["x", "<=>", ">=", "y"]);
@@ -3704,10 +3700,10 @@ mod superclass_tests {
         assert_local_diagnostics_eq!(
             &context,
             [
-                "dynamic-ancestor: Dynamic superclass (1:13-1:24)",
-                "dynamic-ancestor: Dynamic superclass (2:13-2:16)",
-                "dynamic-constant-reference: Dynamic constant reference (4:13-4:16)",
-                "dynamic-ancestor: Dynamic superclass (4:13-4:21)",
+                "DynamicAncestor: Dynamic superclass (1:13-1:24)",
+                "DynamicAncestor: Dynamic superclass (2:13-2:16)",
+                "DynamicConstantReference: Dynamic constant reference (4:13-4:16)",
+                "DynamicAncestor: Dynamic superclass (4:13-4:21)",
             ]
         );
 
@@ -3890,15 +3886,15 @@ mod mixin_tests {
         assert_local_diagnostics_eq!(
             &context,
             [
-                "dynamic-constant-reference: Dynamic constant reference (1:9-1:12)",
-                "dynamic-ancestor: Dynamic mixin argument (1:9-1:17)",
-                "dynamic-constant-reference: Dynamic constant reference (2:9-2:12)",
-                "dynamic-ancestor: Dynamic mixin argument (2:9-2:17)",
-                "dynamic-constant-reference: Dynamic constant reference (3:8-3:11)",
-                "dynamic-ancestor: Dynamic mixin argument (3:8-3:16)",
-                "dynamic-ancestor: Dynamic mixin argument (5:9-5:12)",
-                "dynamic-ancestor: Dynamic mixin argument (6:9-6:12)",
-                "dynamic-ancestor: Dynamic mixin argument (7:8-7:11)"
+                "DynamicConstantReference: Dynamic constant reference (1:9-1:12)",
+                "DynamicAncestor: Dynamic mixin argument (1:9-1:17)",
+                "DynamicConstantReference: Dynamic constant reference (2:9-2:12)",
+                "DynamicAncestor: Dynamic mixin argument (2:9-2:17)",
+                "DynamicConstantReference: Dynamic constant reference (3:8-3:11)",
+                "DynamicAncestor: Dynamic mixin argument (3:8-3:16)",
+                "DynamicAncestor: Dynamic mixin argument (5:9-5:12)",
+                "DynamicAncestor: Dynamic mixin argument (6:9-6:12)",
+                "DynamicAncestor: Dynamic mixin argument (7:8-7:11)"
             ]
         );
         assert!(context.graph().definitions().is_empty());
@@ -3917,9 +3913,9 @@ mod mixin_tests {
         assert_local_diagnostics_eq!(
             &context,
             [
-                "top-level-mixin-self: Top level mixin self (1:9-1:13)",
-                "top-level-mixin-self: Top level mixin self (2:9-2:13)",
-                "top-level-mixin-self: Top level mixin self (3:8-3:12)"
+                "TopLevelMixinSelf: Top level mixin self (1:9-1:13)",
+                "TopLevelMixinSelf: Top level mixin self (2:9-2:13)",
+                "TopLevelMixinSelf: Top level mixin self (3:8-3:12)"
             ]
         );
 
@@ -5316,8 +5312,8 @@ mod diagnostic_tests {
         assert_local_diagnostics_eq!(
             &context,
             [
-                "parse-error: expected an `end` to close the `class` statement (1:1-1:6)",
-                "parse-error: unexpected end-of-input, assuming it is closing the parent top level context (1:10-2:1)"
+                "ParseError: expected an `end` to close the `class` statement (1:1-1:6)",
+                "ParseError: unexpected end-of-input, assuming it is closing the parent top level context (1:10-2:1)"
             ],
             severity: Severity::Error
         );
@@ -5339,7 +5335,7 @@ mod diagnostic_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            ["parse-warning: assigned but unused variable - foo (1:1-1:4)"],
+            ["ParseWarning: assigned but unused variable - foo (1:1-1:4)"],
             severity: Severity::Warning
         );
     }

@@ -3094,7 +3094,7 @@ mod variable_tests {
 
         assert_diagnostics_eq!(
             &context,
-            ["dynamic-singleton-definition: Dynamic receiver for singleton method definition (2:3-4:6)",]
+            ["DynamicSingletonDefinition: Dynamic receiver for singleton method definition (2:3-4:6)",]
         );
 
         // Instance variable in method with unresolved receiver should not create a declaration
@@ -5422,7 +5422,7 @@ mod visibility_resolution_tests {
         assert_diagnostics_eq!(
             context,
             &[
-                "undefined-method-visibility-target: undefined method `Foo#nonexistent()` for visibility change (2:12-2:23)"
+                "UndefinedMethodVisibilityTarget: undefined method `Foo#nonexistent()` for visibility change (2:12-2:23)"
             ],
             severity: Severity::Warning
         );
@@ -5558,8 +5558,8 @@ mod visibility_resolution_tests {
         assert_diagnostics_eq!(
             context,
             &[
-                "undefined-constant-visibility-target: undefined constant `NOPE_ONE` for visibility change in `Foo` (2:21-2:29)",
-                "undefined-constant-visibility-target: undefined constant `NOPE_TWO` for visibility change in `Foo` (2:32-2:40)",
+                "UndefinedConstantVisibilityTarget: undefined constant `NOPE_ONE` for visibility change in `Foo` (2:21-2:29)",
+                "UndefinedConstantVisibilityTarget: undefined constant `NOPE_TWO` for visibility change in `Foo` (2:32-2:40)",
             ],
             severity: Severity::Warning
         );
@@ -5585,7 +5585,7 @@ mod visibility_resolution_tests {
         assert_diagnostics_eq!(
             context,
             &[
-                "undefined-constant-visibility-target: undefined constant `CONST` for visibility change in `Child` (6:21-6:26)"
+                "UndefinedConstantVisibilityTarget: undefined constant `CONST` for visibility change in `Child` (6:21-6:26)"
             ]
         );
         assert_visibility_eq!(context, "Parent::CONST", Visibility::Public);
@@ -5727,7 +5727,7 @@ mod visibility_resolution_tests {
         assert_diagnostics_eq!(
             context,
             &[
-                "undefined-method-visibility-target: undefined method `Foo::<Foo>#nonexistent()` for visibility change (2:25-2:36)"
+                "UndefinedMethodVisibilityTarget: undefined method `Foo::<Foo>#nonexistent()` for visibility change (2:25-2:36)"
             ]
         );
     }
@@ -5755,7 +5755,7 @@ mod visibility_resolution_tests {
         assert_diagnostics_eq!(
             context,
             &[
-                "undefined-method-visibility-target: undefined method `Foo::<Foo>#missing()` for visibility change (2:25-2:32)"
+                "UndefinedMethodVisibilityTarget: undefined method `Foo::<Foo>#missing()` for visibility change (2:25-2:32)"
             ]
         );
 
@@ -5781,7 +5781,7 @@ mod visibility_resolution_tests {
         assert_diagnostics_eq!(
             context,
             &[
-                "undefined-method-visibility-target: undefined method `Foo::<Foo>#missing()` for visibility change (2:25-2:32)"
+                "UndefinedMethodVisibilityTarget: undefined method `Foo::<Foo>#missing()` for visibility change (2:25-2:32)"
             ]
         );
 
@@ -5921,7 +5921,7 @@ mod visibility_resolution_tests {
         // The singleton-side def stays silent; only the instance-side def emits.
         assert_diagnostics_eq!(
             context,
-            &["undefined-method-visibility-target: undefined method `Foo#missing()` for visibility change (2:20-2:27)"]
+            &["UndefinedMethodVisibilityTarget: undefined method `Foo#missing()` for visibility change (2:20-2:27)"]
         );
         assert_declaration_does_not_exist!(context, "Foo::<Foo>#missing()");
         assert_declaration_does_not_exist!(context, "Foo::<Foo>");

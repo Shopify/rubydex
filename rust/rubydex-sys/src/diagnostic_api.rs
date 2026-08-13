@@ -16,8 +16,8 @@ pub enum DiagnosticSeverity {
     Hint = 4,
 }
 
-impl From<&Severity> for DiagnosticSeverity {
-    fn from(severity: &Severity) -> Self {
+impl From<Severity> for DiagnosticSeverity {
+    fn from(severity: Severity) -> Self {
         match severity {
             Severity::Error => DiagnosticSeverity::Error,
             Severity::Warning => DiagnosticSeverity::Warning,
@@ -79,7 +79,7 @@ pub unsafe extern "C" fn rdx_graph_diagnostics(pointer: GraphPointer) -> *mut Di
                         .cast_const(),
                     message: CString::new(diagnostic.message()).unwrap().into_raw().cast_const(),
                     location,
-                    severity: DiagnosticSeverity::from(diagnostic.severity()),
+                    severity: DiagnosticSeverity::from(diagnostic.rule().default_severity()),
                 }
             })
             .collect::<Vec<DiagnosticEntry>>();

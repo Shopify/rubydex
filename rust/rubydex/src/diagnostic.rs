@@ -1,23 +1,21 @@
 #[cfg(any(test, feature = "test_utils"))]
 use crate::model::document::Document;
-use crate::{model::ids::UriId, offset::Offset};
+use crate::{assert_mem_size, model::ids::UriId, offset::Offset};
 
 #[derive(Debug)]
 pub struct Diagnostic {
     rule: Rule,
-    // Severity belongs to each diagnostic; every producer must assign it explicitly.
-    severity: Severity,
     uri_id: UriId,
     offset: Offset,
     message: String,
 }
+assert_mem_size!(Diagnostic, 48);
 
 impl Diagnostic {
     #[must_use]
-    pub fn new(rule: Rule, severity: Severity, uri_id: UriId, offset: Offset, message: String) -> Self {
+    pub fn new(rule: Rule, uri_id: UriId, offset: Offset, message: String) -> Self {
         Self {
             rule,
-            severity,
             uri_id,
             offset,
             message,
@@ -27,11 +25,6 @@ impl Diagnostic {
     #[must_use]
     pub fn rule(&self) -> &Rule {
         &self.rule
-    }
-
-    #[must_use]
-    pub fn severity(&self) -> &Severity {
-        &self.severity
     }
 
     #[must_use]
@@ -70,60 +63,61 @@ pub enum Severity {
     Hint,
 }
 
-fn camel_to_snake(s: &str) -> String {
-    let mut snake = String::new();
-    for (i, ch) in s.chars().enumerate() {
-        if ch.is_uppercase() {
-            if i != 0 {
-                snake.push('-');
-            }
-            for lc in ch.to_lowercase() {
-                snake.push(lc);
-            }
-        } else {
-            snake.push(ch);
-        }
-    }
-    snake
-}
-
-macro_rules! rules {
-    (
-        $( $variant:ident );* $(;)?
-    ) => {
-        #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-        pub enum Rule {
-            $(
-                $variant,
-            )*
-        }
-
-        impl std::fmt::Display for Rule {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}", match self {
-                    $(
-                        Rule::$variant => camel_to_snake(stringify!($variant)),
-                    )*
-                })
-            }
-        }
-    }
-}
-
-rules! {
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Rule {
     // Parsing
-    ParseError;
-    ParseWarning;
+    ParseError,
+    ParseWarning,
 
     // Indexing
-    DynamicConstantReference;
-    DynamicSingletonDefinition;
-    DynamicAncestor;
-    TopLevelMixinSelf;
-    InvalidConstantVisibility;
-    InvalidMethodVisibility;
+    DynamicConstantReference,
+    DynamicSingletonDefinition,
+    DynamicAncestor,
+    TopLevelMixinSelf,
+    InvalidConstantVisibility,
+    InvalidMethodVisibility,
 
     // Resolution
-    UndefinedMethodVisibilityTarget;
-    UndefinedConstantVisibilityTarget;
+    UndefinedMethodVisibilityTarget,
+    UndefinedConstantVisibilityTarget,
+}
+
+impl Rule {
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::ParseError => "ParseError",
+            Self::ParseWarning => "ParseWarning",
+            Self::DynamicConstantReference => "DynamicConstantReference",
+            Self::DynamicSingletonDefinition => "DynamicSingletonDefinition",
+            Self::DynamicAncestor => "DynamicAncestor",
+            Self::TopLevelMixinSelf => "TopLevelMixinSelf",
+            Self::InvalidConstantVisibility => "InvalidConstantVisibility",
+            Self::InvalidMethodVisibility => "InvalidMethodVisibility",
+            Self::UndefinedMethodVisibilityTarget => "UndefinedMethodVisibilityTarget",
+            Self::UndefinedConstantVisibilityTarget => "UndefinedConstantVisibilityTarget",
+        }
+    }
+
+    #[must_use]
+    pub fn default_severity(&self) -> Severity {
+        match self {
+            Self::ParseError => Severity::Error,
+            Self::ParseWarning
+            | Self::InvalidConstantVisibility
+            | Self::InvalidMethodVisibility
+            | Self::UndefinedMethodVisibilityTarget
+            | Self::UndefinedConstantVisibilityTarget => Severity::Warning,
+            Self::DynamicConstantReference
+            | Self::DynamicSingletonDefinition
+            | Self::DynamicAncestor
+            | Self::TopLevelMixinSelf => Severity::Information,
+        }
+    }
+}
+
+impl std::fmt::Display for Rule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name())
+    }
 }
