@@ -307,7 +307,7 @@ end
 
 class Rubydex::Severity::Base
   abstract!
-  
+
   sig { returns(Symbol) }
   def self.value; end
 end
@@ -316,6 +316,20 @@ class Rubydex::Severity::Error < Rubydex::Severity::Base; end
 class Rubydex::Severity::Warning < Rubydex::Severity::Base; end
 class Rubydex::Severity::Information < Rubydex::Severity::Base; end
 class Rubydex::Severity::Hint < Rubydex::Severity::Base; end
+
+class Rubydex::RuleDefinition
+  abstract!
+
+  class << self
+    abstract!
+
+    sig { returns(String) }
+    def rule_name; end
+
+    sig { abstract.returns(T.class_of(Rubydex::Severity::Base)) }
+    def default_severity; end
+  end
+end
 
 class Rubydex::RelatedInformation
   sig { params(message: String, location: Rubydex::Location).void }
@@ -407,7 +421,6 @@ module Rubydex::Linter::Helpers::PathHelpers
 
   sig { params(definition: Rubydex::Definition).returns(T.nilable(String)) }
   def path_for_definition(definition); end
-
 end
 
 module Rubydex::Linter::Helpers::SourceAccessHelpers
@@ -423,18 +436,9 @@ module Rubydex::Linter::Helpers::SourceAccessHelpers
   def source_for_location(location); end
 end
 
-class Rubydex::Linter::Rule
+# Base class for semantic lint rules, which collect their diagnostics by walking a resolved graph.
+class Rubydex::Linter::Rule < Rubydex::RuleDefinition
   abstract!
-
-  class << self
-    abstract!
-
-    sig { returns(String) }
-    def rule_name; end
-
-    sig { abstract.returns(T.class_of(Rubydex::Severity::Base)) }
-    def default_severity; end
-  end
 
   sig { params(graph: Rubydex::Graph, config: Rubydex::LinterConfig).void }
   def initialize(graph, config:); end
@@ -484,7 +488,6 @@ class Rubydex::Linter::Rule
     ).void
   end
   def add_diagnostic(message, location, related_information: []); end
-
 end
 
 class Rubydex::Linter::MissingGraphDependencyError < StandardError
@@ -518,7 +521,7 @@ class Rubydex::Linter::Rules::RuleStructure < Rubydex::Linter::Rule
   def lint; end
 end
 
-class Rubydex::Linter::RuleTestCase < ::Minitest::Test
+class Rubydex::Linter::RuleTestCase < Minitest::Test
   DEFAULT_FILE = T.let(T.unsafe(nil), String)
   ANNOTATION_PATTERN = T.let(T.unsafe(nil), Regexp)
 
@@ -674,13 +677,13 @@ class Rubydex::LinterConfig
   sig { params(rules: T::Hash[String, Rubydex::RuleConfig]).void }
   def initialize(rules); end
 
-  sig { params(rule_class: T.class_of(Rubydex::Linter::Rule)).returns(T::Boolean) }
+  sig { params(rule_class: T.class_of(Rubydex::RuleDefinition)).returns(T::Boolean) }
   def rule_enabled?(rule_class); end
 
-  sig { params(rule_class: T.class_of(Rubydex::Linter::Rule)).returns(T::Array[String]) }
+  sig { params(rule_class: T.class_of(Rubydex::RuleDefinition)).returns(T::Array[String]) }
   def excludes_for(rule_class); end
 
-  sig { params(rule_class: T.class_of(Rubydex::Linter::Rule)).returns(T.class_of(Rubydex::Severity::Base)) }
+  sig { params(rule_class: T.class_of(Rubydex::RuleDefinition)).returns(T.class_of(Rubydex::Severity::Base)) }
   def severity_for(rule_class); end
 end
 
