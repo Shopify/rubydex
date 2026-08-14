@@ -99,7 +99,10 @@ impl Job for FileDiscoveryJob {
     }
 }
 
-fn is_indexable_file(path: &Path) -> bool {
+/// Whether a path is one of the file kinds indexing understands. Shared with the snapshot manifest
+/// so that discovering a new file uses exactly the same rule as the original listing.
+#[must_use]
+pub fn is_indexable_file(path: &Path) -> bool {
     path.extension()
         .is_some_and(|ext| ext == "rb" || ext == "rake" || ext == "rbs" || ext == "ru")
 }

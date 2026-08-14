@@ -1008,10 +1008,21 @@ impl Graph {
     /// accumulates pending work items for the resolver to process.
     pub fn delete_document(&mut self, uri: &str) -> Option<UriId> {
         let uri_id = UriId::from(uri);
-        let document = self.documents.remove(&uri_id)?;
+        self.delete_document_by_id(uri_id).then_some(uri_id)
+    }
+
+    /// Handles the deletion of a document already identified by its `UriId`.
+    /// Returns whether a document was removed.
+    ///
+    /// A snapshot manifest records ids rather than URI strings, so this is the entry point for
+    /// dropping documents whose file has disappeared. Behaves exactly like [`Graph::delete_document`].
+    pub fn delete_document_by_id(&mut self, uri_id: UriId) -> bool {
+        let Some(document) = self.documents.remove(&uri_id) else {
+            return false;
+        };
         self.invalidate(Some(&document), None);
         self.remove_document_data(&document);
-        Some(uri_id)
+        true
     }
 
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
