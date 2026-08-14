@@ -1,6 +1,6 @@
 use std::collections::{HashSet, VecDeque, hash_map::Entry};
 
-use crate::diagnostic::{Diagnostic, Rule, Severity};
+use crate::diagnostic::{Diagnostic, Rule};
 use crate::model::{
     built_in::{BASIC_OBJECT_ID, CLASS_ID, KERNEL_ID, MODULE_ID, OBJECT_ID},
     declaration::{
@@ -654,7 +654,6 @@ impl<'a> Resolver<'a> {
                     } else {
                         let diagnostic = Diagnostic::new(
                             Rule::UndefinedConstantVisibilityTarget,
-                            Severity::Warning,
                             uri_id,
                             offset,
                             format!(
@@ -776,7 +775,6 @@ impl<'a> Resolver<'a> {
             let owner_name = self.graph.declarations().get(&namespace_id).unwrap().name().to_string();
             let diagnostic = Diagnostic::new(
                 Rule::UndefinedMethodVisibilityTarget,
-                Severity::Warning,
                 uri_id,
                 offset,
                 format!("undefined method `{owner_name}#{method_name}` for visibility change"),

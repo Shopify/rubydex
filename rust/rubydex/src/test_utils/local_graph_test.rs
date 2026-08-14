@@ -566,7 +566,7 @@ macro_rules! assert_local_diagnostics_eq {
             .graph()
             .diagnostics()
             .iter()
-            .map(|diagnostic| *diagnostic.severity())
+            .map(|diagnostic| diagnostic.rule().default_severity())
             .collect::<Vec<_>>();
         assert_eq!(
             vec![expected_severity; actual_severities.len()],

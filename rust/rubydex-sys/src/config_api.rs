@@ -128,7 +128,7 @@ impl From<&Rule> for CLinterRule {
             Box::into_raw(exclude_patterns).cast::<CConfigString>().cast_const()
         };
         let severity = rule.severity().map_or(ptr::null(), |severity| {
-            Box::into_raw(Box::new(DiagnosticSeverity::from(severity))).cast_const()
+            Box::into_raw(Box::new(DiagnosticSeverity::from(*severity))).cast_const()
         });
 
         Self {

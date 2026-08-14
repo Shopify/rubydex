@@ -183,7 +183,7 @@ class LinterTest < Minitest::Test
 
     result = Rubydex::Linter::Runner.new(graph, rules: [SilentRule], config: linter_config).run
 
-    assert_equal(["parse-error", "parse-error"], result.diagnostics.map(&:rule))
+    assert_equal(["ParseError", "ParseError"], result.diagnostics.map(&:rule))
     assert(result.diagnostics.all? { |diagnostic| diagnostic.severity == Rubydex::Severity::Error })
     refute_predicate(result, :success?)
   end

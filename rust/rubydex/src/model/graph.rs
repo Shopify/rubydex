@@ -2185,9 +2185,9 @@ mod tests {
 
         assert_eq!(
             vec![
-                "parse-error: expected an `end` to close the `class` statement (file:///foo1.rb)",
-                "parse-error: unexpected end-of-input, assuming it is closing the parent top level context (file:///foo1.rb)",
-                "parse-warning: assigned but unused variable - foo (file:///foo2.rb)",
+                "ParseError: expected an `end` to close the `class` statement (file:///foo1.rb)",
+                "ParseError: unexpected end-of-input, assuming it is closing the parent top level context (file:///foo1.rb)",
+                "ParseWarning: assigned but unused variable - foo (file:///foo2.rb)",
             ],
             diagnostics,
         );
