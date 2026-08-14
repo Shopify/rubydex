@@ -92,6 +92,8 @@ module Rubydex
       #: (Array[String] argv) -> void
       def initialize(argv)
         @argv = argv
+        @no_cache = false
+        @verify_content = false
       end
 
       #: -> void
@@ -116,6 +118,11 @@ module Rubydex
       # declaration. `-h`/`--help` prints the parser and exits, so every subcommand documents itself
       # the same way. Pass `options: true` when the command accepts options beyond `--help`.
       #
+      # `--no-cache` and `--verify-content` are registered here rather than in each subcommand file,
+      # since they only affect {#build_graph} and no subcommand otherwise shares an option-parsing
+      # helper: every subcommand that indexes a workspace gets them for free, including ones (like
+      # `console`) that declare no options of their own.
+      #
       # A bad option reports the message and the usage text, so every subcommand rejects bad input
       # the same way.
       #: (?options: bool) ?{ (OptionParser parser) -> void } -> void
@@ -126,6 +133,12 @@ module Rubydex
         @parser = OptionParser.new do |p|
           p.banner = banner
           yield(p) if block_given?
+          p.on("--no-cache", "Disable the on-disk index snapshot and re-index the whole workspace") do
+            @no_cache = true
+          end
+          p.on("--verify-content", "Detect changed files by content hash instead of by mtime") do
+            @verify_content = true
+          end
           p.on("-h", "--help", "Show this help") do
             puts(p)
             exit
@@ -138,12 +151,37 @@ module Rubydex
       end
 
       # Builds the workspace graph, sending progress messages to `progress_io`.
+      #
+      # By default this indexes and resolves through the on-disk snapshot cache (see
+      # {Rubydex::Graph#index_workspace}), which does both jobs in a single call: a cache hit skips
+      # the separate resolve step entirely because there is nothing left to resolve. `--no-cache`
+      # (surfaced through {#parse_options!}) falls back to the original, always-full index-then-resolve
+      # sequence.
       #: (IO progress_io, ?workspace_path: String, ?config: Rubydex::Config) -> Rubydex::Graph
       def build_graph(progress_io, workspace_path: Dir.pwd, config: Rubydex::Config.load(workspace_path))
         graph = Rubydex::Graph.new
         graph.load_config(config)
-        with_timer(progress_io, "Indexing workspace...") { graph.index_workspace }
-        with_timer(progress_io, "Resolving graph...") { graph.resolve }
+
+        if @no_cache
+          with_timer(progress_io, "Indexing workspace...") { graph.index_workspace(cache: false) }
+          with_timer(progress_io, "Resolving graph...") { graph.resolve }
+          return graph
+        end
+
+        result = with_timer(progress_io, "Indexing workspace...") do
+          graph.index_workspace(verify_content: @verify_content)
+        end
+
+        if result[:cache_hit]
+          progress_io.puts(
+            "Reused snapshot (#{result[:reindexed]} re-indexed, #{result[:removed]} removed)",
+          )
+        else
+          # The cached call above already resolved the graph, so this only re-confirms there is
+          # nothing left in the resolver's worklist; kept for output parity with a full index.
+          with_timer(progress_io, "Resolving graph...") { graph.resolve }
+        end
+
         graph
       end
 

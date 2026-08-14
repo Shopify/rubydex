@@ -804,9 +804,28 @@ class Rubydex::Graph
   sig { params(uri: String, source: String, language_id: String).void }
   def index_source(uri, source, language_id); end
 
-  # Index all files and dependencies of the workspace that exists in `workspace_path`
-  sig { returns(T::Array[String]) }
-  def index_workspace; end
+  # Index all files and dependencies of the workspace that exists in `workspace_path`, going through
+  # the on-disk snapshot cache by default (see `index_cached`) and resolving in the same call.
+  sig do
+    params(
+      cache: T::Boolean,
+      cache_path: T.nilable(String),
+      verify_content: T::Boolean,
+    ).returns(T::Hash[Symbol, T.untyped])
+  end
+  def index_workspace(cache: true, cache_path: nil, verify_content: false); end
+
+  # Populates the graph from an on-disk snapshot when one is usable, indexing only the files that
+  # changed since it was written, and otherwise indexes everything and writes a snapshot for next
+  # time. Resolves the graph before returning either way.
+  sig do
+    params(
+      file_paths: T::Array[String],
+      cache_path: T.nilable(String),
+      verify_content: T::Boolean,
+    ).returns(T::Hash[Symbol, T.untyped])
+  end
+  def index_cached(file_paths, cache_path, verify_content); end
 
   # Returns the keyword object for the name, or `nil` if it is not a Ruby keyword
   sig { params(name: String).returns(T.nilable(Rubydex::Keyword)) }

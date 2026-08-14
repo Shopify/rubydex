@@ -120,6 +120,56 @@ static VALUE rdxr_graph_index_all(VALUE self, VALUE file_paths) {
 
 /*
  * call-seq:
+ *   index_cached(file_paths, cache_path, verify_content) -> Hash
+ *
+ * Indexes and resolves file_paths using an on-disk snapshot cache: reuses a snapshot when one is
+ * usable, indexing only the files that changed, and otherwise indexes everything and writes a fresh
+ * snapshot. Resolution runs as part of this call, so calling `resolve` afterwards is unnecessary
+ * (though harmless). cache_path may be nil, in which case a default location derived from
+ * file_paths is used. Returns a Hash with keys :errors (Array[String]), :cache_hit (Boolean),
+ * :reindexed (Integer), and :removed (Integer).
+ */
+static VALUE rdxr_graph_index_cached(VALUE self, VALUE file_paths, VALUE cache_path, VALUE verify_content) {
+    rdxi_check_array_of_strings(file_paths);
+
+    if (!NIL_P(cache_path)) {
+        Check_Type(cache_path, T_STRING);
+    }
+
+    // Convert the given file paths into a char** array, so that we can pass to Rust
+    size_t length = RARRAY_LEN(file_paths);
+    char **converted_file_paths = rdxi_str_array_to_char(file_paths, length);
+    const char *cache_path_str = NIL_P(cache_path) ? NULL : StringValueCStr(cache_path);
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    struct CIndexCacheStats stats = {0};
+    size_t error_count = 0;
+    const char *const *errors = rdx_graph_index_cached(graph, (const char **)converted_file_paths, length,
+                                                         cache_path_str, RTEST(verify_content), &stats, &error_count);
+
+    rdxi_free_str_array(converted_file_paths, length);
+
+    VALUE error_array = rb_ary_new_capa((long)error_count);
+    for (size_t i = 0; i < error_count; i++) {
+        rb_ary_push(error_array, rb_utf8_str_new_cstr(errors[i]));
+    }
+
+    if (errors != NULL) {
+        free_c_string_array(errors, error_count);
+    }
+
+    VALUE result = rb_hash_new();
+    rb_hash_aset(result, ID2SYM(rb_intern("errors")), error_array);
+    rb_hash_aset(result, ID2SYM(rb_intern("cache_hit")), stats.cache_hit ? Qtrue : Qfalse);
+    rb_hash_aset(result, ID2SYM(rb_intern("reindexed")), SIZET2NUM(stats.reindexed));
+    rb_hash_aset(result, ID2SYM(rb_intern("removed")), SIZET2NUM(stats.removed));
+    return result;
+}
+
+/*
+ * call-seq:
  *   index_source(uri, source, language_id) -> nil
  *
  * Indexes a single source string in memory, dispatching to the appropriate indexer based on language_id.
@@ -926,6 +976,7 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_define_method(cGraph, "initialize_copy", rdxr_graph_initialize_copy, 1);
     rb_define_method(cGraph, "initialize_clone", rdxr_graph_initialize_copy, 1);
     rb_define_method(cGraph, "index_all", rdxr_graph_index_all, 1);
+    rb_define_method(cGraph, "index_cached", rdxr_graph_index_cached, 3);
     rb_define_method(cGraph, "index_source", rdxr_graph_index_source, 3);
     rb_define_method(cGraph, "document", rdxr_graph_document, 1);
     rb_define_method(cGraph, "delete_document", rdxr_graph_delete_document, 1);

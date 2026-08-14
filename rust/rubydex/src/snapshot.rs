@@ -46,11 +46,16 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use xxhash_rust::xxh3::Xxh3Default;
+
 use crate::errors::Errors;
 use crate::indexing::{self, IndexerBackend};
+use crate::listing;
 use crate::model::graph::{ArchivedGraph, Graph};
+use crate::path_helpers;
 use crate::resolution::Resolver;
 use crate::snapshot::manifest::{ArchivedManifest, Changes, Manifest, Verification};
+use crate::stats::timer::time_it;
 use memmap2::Mmap;
 use rkyv::rancor::Error as RkyvError;
 
@@ -162,6 +167,141 @@ pub fn write<P: AsRef<Path>>(graph: &Graph, roots: &[PathBuf], path: P) -> Resul
     file.flush()?;
 
     Ok((HEADER_LEN + manifest_len + padding + graph_archive.len()) as u64)
+}
+
+/// What [`load_or_index`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheOutcome {
+    /// No usable snapshot: everything was indexed and a snapshot was written.
+    Miss,
+    /// A snapshot was reused. The counts describe the catch-up work, not the whole graph.
+    Hit { reindexed: usize, removed: usize },
+}
+
+impl CacheOutcome {
+    #[must_use]
+    pub fn is_hit(self) -> bool {
+        matches!(self, CacheOutcome::Hit { .. })
+    }
+}
+
+/// Default on-disk location for a workspace's snapshot.
+///
+/// The file lives under the user cache directory, honouring `XDG_CACHE_HOME` and falling back to
+/// `~/.cache`, and never inside the workspace. That matters: a snapshot written into an indexed
+/// directory would bump that directory's mtime, and the manifest would then report a change on
+/// every single run.
+///
+/// The name is a hash of the indexed roots, so two workspaces, or two checkouts of the same
+/// repository, never share a file.
+#[must_use]
+pub fn default_cache_path(roots: &[PathBuf]) -> PathBuf {
+    let mut sorted: Vec<String> = roots.iter().map(|root| root.to_string_lossy().into_owned()).collect();
+    sorted.sort();
+
+    let mut hasher = Xxh3Default::new();
+    for root in &sorted {
+        hasher.update(root.as_bytes());
+        hasher.update(b"\0");
+    }
+    let key = hasher.digest();
+
+    let base = std::env::var_os("XDG_CACHE_HOME").map_or_else(
+        || std::env::var_os("HOME").map_or_else(std::env::temp_dir, |home| PathBuf::from(home).join(".cache")),
+        PathBuf::from,
+    );
+
+    base.join("rubydex").join(format!("{key:016x}.rdxsnap"))
+}
+
+/// Populates `graph` from a snapshot when one is usable, and otherwise indexes from scratch.
+///
+/// This is the entry point a normal caller wants, and it is what makes snapshots the default
+/// rather than an opt-in. On a hit it re-indexes only the files the manifest reports as changed
+/// and resolves only the invalidated subset. On a miss it indexes everything, resolves, and writes
+/// a snapshot so the next run is a hit.
+///
+/// Either way `graph` comes back fully resolved. A caller does not need to call
+/// [`Resolver`] afterwards, though doing so is harmless because the worklist will be empty.
+///
+/// A snapshot is rejected, and the run falls back to a full index, when:
+/// - the file is missing, unreadable, or written by a different format version,
+/// - it was built from a different set of roots,
+/// - it was built with different exclusion patterns, which change the file set in a way no
+///   per-file check could detect.
+///
+/// Failing to write the snapshot is not an error. The graph is correct either way, and the next
+/// run simply pays the full cost again.
+pub fn load_or_index(
+    graph: &mut Graph,
+    roots: &[PathBuf],
+    cache_path: &Path,
+    verification: Verification,
+    backend: IndexerBackend,
+) -> (Vec<Errors>, CacheOutcome) {
+    if let Some((restored, changes, errors)) = try_reuse(graph, roots, cache_path, verification, backend) {
+        *graph = restored;
+        let outcome = CacheOutcome::Hit {
+            reindexed: changes.to_index(),
+            removed: changes.removed.len(),
+        };
+        return (errors, outcome);
+    }
+
+    // Report the same phases a plain indexing run does, so `--stats` stays meaningful whether or
+    // not a snapshot was reused.
+    let excluded = graph.excluded_patterns();
+    let string_roots: Vec<String> = roots.iter().map(|root| root.to_string_lossy().into_owned()).collect();
+    let (file_paths, mut errors) = time_it!(listing, { listing::collect_file_paths(string_roots, &excluded) });
+
+    errors.extend(time_it!(indexing, {
+        indexing::index_files(graph, file_paths, backend)
+    }));
+    time_it!(resolution, {
+        Resolver::new(graph).resolve();
+    });
+
+    if let Some(parent) = cache_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // A snapshot is an optimization. Losing it must never fail the run.
+    let _ = write(graph, roots, cache_path);
+
+    (errors, CacheOutcome::Miss)
+}
+
+/// Tries to reuse the snapshot at `cache_path`, returning `None` when it does not apply.
+fn try_reuse(
+    graph: &Graph,
+    roots: &[PathBuf],
+    cache_path: &Path,
+    verification: Verification,
+    backend: IndexerBackend,
+) -> Option<(Graph, Changes, Vec<Errors>)> {
+    let snapshot = Snapshot::open(cache_path).ok()?;
+    let manifest = snapshot.manifest();
+
+    if !manifest.excludes_match(&graph.excluded_patterns()) {
+        return None;
+    }
+
+    // Normalize both sides: the caller may pass relative paths, and the manifest stores the
+    // resolved spelling. This must match how `Manifest::build` resolves its roots, verbatim
+    // Windows prefixes included, or an otherwise valid snapshot never matches.
+    let mut wanted: Vec<String> = roots
+        .iter()
+        .filter_map(|root| path_helpers::resolved(root).ok())
+        .map(|root| root.to_string_lossy().into_owned())
+        .collect();
+    wanted.sort();
+    let mut recorded: Vec<String> = manifest.roots.iter().map(std::string::ToString::to_string).collect();
+    recorded.sort();
+    if wanted != recorded {
+        return None;
+    }
+
+    let (restored, changes, errors) = snapshot.catch_up(verification, backend).ok()?;
+    Some((restored, changes, errors))
 }
 
 /// A memory-mapped snapshot file.
@@ -404,7 +544,7 @@ mod tests {
     /// directory bumps that directory's mtime, which the tree would correctly report as a change.
     fn workspace(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
-        let base = crate::path_helpers::resolved(directory.path()).unwrap();
+        let base = path_helpers::resolved(directory.path()).unwrap();
         let root = base.join("workspace");
         std::fs::create_dir_all(&root).unwrap();
 
@@ -838,5 +978,211 @@ mod tests {
         assert!(changes.is_empty());
         assert_eq!(changes.to_index(), 0);
         assert_eq!(declaration_names(&caught_up), declaration_names(&graph_for(&root)));
+    }
+
+    // ---------------------------------------------------------------- default caching
+
+    /// A workspace laid out on disk, with no snapshot written yet.
+    fn bare_workspace(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let base = path_helpers::resolved(directory.path()).unwrap();
+        let root = base.join("workspace");
+        std::fs::create_dir_all(&root).unwrap();
+        for (name, source) in files {
+            let path = root.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, source).unwrap();
+        }
+        (directory, root, base.join("cache.rdxsnap"))
+    }
+
+    #[test]
+    fn the_first_run_misses_and_writes_a_snapshot() {
+        let (_directory, root, cache) = bare_workspace(&[("a.rb", "class A; end\n")]);
+        assert!(!cache.exists());
+
+        let mut graph = Graph::new();
+        let (errors, outcome) = load_or_index(
+            &mut graph,
+            std::slice::from_ref(&root),
+            &cache,
+            Verification::Metadata,
+            IndexerBackend::RubyIndexer,
+        );
+
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(outcome, CacheOutcome::Miss);
+        assert!(cache.exists(), "a miss must leave a snapshot behind");
+        // The graph comes back resolved, so a caller never has to resolve again.
+        assert!(graph.get("A").is_some());
+    }
+
+    #[test]
+    fn the_second_run_hits_and_indexes_nothing() {
+        let (_directory, root, cache) = bare_workspace(&[("a.rb", "class A; end\n")]);
+
+        let mut first = Graph::new();
+        load_or_index(
+            &mut first,
+            std::slice::from_ref(&root),
+            &cache,
+            Verification::Metadata,
+            IndexerBackend::RubyIndexer,
+        );
+
+        let mut second = Graph::new();
+        let (_, outcome) = load_or_index(
+            &mut second,
+            std::slice::from_ref(&root),
+            &cache,
+            Verification::Metadata,
+            IndexerBackend::RubyIndexer,
+        );
+
+        assert_eq!(
+            outcome,
+            CacheOutcome::Hit {
+                reindexed: 0,
+                removed: 0
+            }
+        );
+        assert_eq!(declaration_names(&second), declaration_names(&first));
+    }
+
+    #[test]
+    fn a_hit_reindexes_only_what_changed() {
+        let (_directory, root, cache) = bare_workspace(&[
+            ("a.rb", "class A; end\n"),
+            ("b.rb", "class B; end\n"),
+            ("c.rb", "class C; end\n"),
+        ]);
+
+        let mut first = Graph::new();
+        load_or_index(
+            &mut first,
+            std::slice::from_ref(&root),
+            &cache,
+            Verification::Metadata,
+            IndexerBackend::RubyIndexer,
+        );
+
+        rewrite(&root.join("b.rb"), "class B\n  def fresh; end\nend\n");
+
+        let mut second = Graph::new();
+        let (_, outcome) = load_or_index(
+            &mut second,
+            std::slice::from_ref(&root),
+            &cache,
+            Verification::Metadata,
+            IndexerBackend::RubyIndexer,
+        );
+
+        assert_eq!(
+            outcome,
+            CacheOutcome::Hit {
+                reindexed: 1,
+                removed: 0
+            },
+            "only b.rb is re-indexed"
+        );
+        assert!(second.get("B#fresh()").is_some());
+        assert_eq!(declaration_names(&second), declaration_names(&graph_for(&root)));
+    }
+
+    /// Changing the exclusion set changes which files belong in the graph. No per-file check can
+    /// notice that, because the newly excluded file still exists and still matches its metadata.
+    #[test]
+    fn different_exclusions_force_a_full_reindex() {
+        let (_directory, root, cache) =
+            bare_workspace(&[("a.rb", "class A; end\n"), ("skipped/b.rb", "class B; end\n")]);
+
+        let mut first = Graph::new();
+        load_or_index(
+            &mut first,
+            std::slice::from_ref(&root),
+            &cache,
+            Verification::Metadata,
+            IndexerBackend::RubyIndexer,
+        );
+        assert!(first.get("B").is_some(), "B is indexed while nothing excludes it");
+
+        let mut second = Graph::new();
+        second.exclude_patterns(vec![Box::from(format!("{}/skipped/**", root.display()).as_str())]);
+        let (_, outcome) = load_or_index(
+            &mut second,
+            std::slice::from_ref(&root),
+            &cache,
+            Verification::Metadata,
+            IndexerBackend::RubyIndexer,
+        );
+
+        // Whether the pattern then filters that particular file is `listing`'s business, and its
+        // glob spelling differs by platform. What the snapshot owns is the decision to distrust a
+        // manifest built under a different exclusion set.
+        assert_eq!(
+            outcome,
+            CacheOutcome::Miss,
+            "a different exclusion set cannot reuse the snapshot"
+        );
+    }
+
+    #[test]
+    fn a_different_root_set_forces_a_full_reindex() {
+        let (_directory, root, cache) = bare_workspace(&[("a.rb", "class A; end\n"), ("other/b.rb", "class B; end\n")]);
+
+        let mut first = Graph::new();
+        load_or_index(
+            &mut first,
+            std::slice::from_ref(&root),
+            &cache,
+            Verification::Metadata,
+            IndexerBackend::RubyIndexer,
+        );
+
+        // Same snapshot file, narrower roots: the recorded tree no longer describes the request.
+        let mut second = Graph::new();
+        let (_, outcome) = load_or_index(
+            &mut second,
+            &[root.join("other")],
+            &cache,
+            Verification::Metadata,
+            IndexerBackend::RubyIndexer,
+        );
+
+        assert_eq!(outcome, CacheOutcome::Miss);
+    }
+
+    #[test]
+    fn a_corrupt_snapshot_falls_back_to_indexing() {
+        let (_directory, root, cache) = bare_workspace(&[("a.rb", "class A; end\n")]);
+        std::fs::write(&cache, b"definitely not a rubydex snapshot, but long enough to map").unwrap();
+
+        let mut graph = Graph::new();
+        let (_, outcome) = load_or_index(
+            &mut graph,
+            std::slice::from_ref(&root),
+            &cache,
+            Verification::Metadata,
+            IndexerBackend::RubyIndexer,
+        );
+
+        assert_eq!(outcome, CacheOutcome::Miss);
+        assert!(graph.get("A").is_some());
+    }
+
+    #[test]
+    fn the_default_cache_path_is_outside_the_workspace_and_per_root() {
+        let one = default_cache_path(&[PathBuf::from("/tmp/alpha")]);
+        let two = default_cache_path(&[PathBuf::from("/tmp/beta")]);
+
+        assert_ne!(one, two, "two workspaces must not share a snapshot");
+        assert_eq!(
+            one,
+            default_cache_path(&[PathBuf::from("/tmp/alpha")]),
+            "stable across runs"
+        );
+        assert!(!one.starts_with("/tmp/alpha"), "never inside the workspace");
+        assert!(one.to_string_lossy().contains("rubydex"));
+        assert_eq!(one.extension().unwrap(), "rdxsnap");
     }
 }

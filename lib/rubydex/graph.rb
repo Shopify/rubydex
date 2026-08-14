@@ -19,10 +19,23 @@ module Rubydex
       end
     end
 
-    # Index all files and dependencies of the workspace that exists in `workspace_path`
-    #: -> Array[String]
-    def index_workspace
-      index_all(workspace_paths)
+    # Index all files and dependencies of the workspace that exists in `workspace_path`, returning
+    # `{ errors:, cache_hit:, reindexed:, removed: }`.
+    #
+    # With `cache: true` (the default), this loads an on-disk snapshot when one exists, indexes only
+    # the files that changed since it was written, resolves the invalidated subset, and writes a new
+    # snapshot when there was none. Both indexing and resolution happen inside this call: the caller
+    # does not need to call `#resolve` afterward.
+    #
+    # With `cache: false`, this reproduces the original, uncached behaviour exactly: every file is
+    # indexed, no snapshot is read or written, and the caller is still responsible for calling
+    # `#resolve` itself.
+    #
+    #: (?cache: bool, ?cache_path: String?, ?verify_content: bool) -> Hash[Symbol, untyped]
+    def index_workspace(cache: true, cache_path: nil, verify_content: false)
+      return index_cached(workspace_paths, cache_path, verify_content) if cache
+
+      { errors: index_all(workspace_paths), cache_hit: false, reindexed: 0, removed: 0 }
     end
 
     # Returns all workspace paths that should be indexed

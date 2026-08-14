@@ -360,6 +360,106 @@ pub extern "C" fn rdx_graph_resolve(pointer: GraphPointer) {
     });
 }
 
+/// Statistics describing what `rdx_graph_index_cached` did with the on-disk snapshot cache.
+#[repr(C)]
+pub struct CIndexCacheStats {
+    pub cache_hit: bool,
+    pub reindexed: usize,
+    pub removed: usize,
+}
+
+/// Indexes and resolves `file_paths` using an on-disk snapshot cache: reuses a snapshot when one is usable,
+/// indexing only the files that changed, and otherwise indexes everything and writes a fresh snapshot. A caller
+/// does not need to call `rdx_graph_resolve` afterwards, though doing so is harmless.
+///
+/// Writes cache statistics to `out_stats`, an array of error message strings, and writes the error count to
+/// `error_count`. Returns NULL if there are no errors. Caller must free the returned array with
+/// `free_c_string_array`.
+///
+/// # Panics
+///
+/// Will panic if the given array of C string file paths cannot be converted to a `Vec<String>`, or if `cache_path`
+/// is non-null but not valid UTF-8.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers coming from C. The caller has to ensure that the
+/// Ruby VM will not free the pointers related to the string array while they are in use by Rust. `cache_path`, if
+/// non-null, must be a valid, null-terminated UTF-8 string. `out_stats` is assumed to be a valid, writable,
+/// non-null pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_index_cached(
+    pointer: GraphPointer,
+    file_paths: *const *const c_char,
+    length: usize,
+    cache_path: *const c_char,
+    verify_content: bool,
+    out_stats: *mut CIndexCacheStats,
+    error_count: *mut usize,
+) -> *const *const c_char {
+    let roots: Vec<PathBuf> = unsafe { utils::convert_double_pointer_to_vec(file_paths, length).unwrap() }
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+
+    let cache_path: PathBuf = if cache_path.is_null() {
+        rubydex::snapshot::default_cache_path(&roots)
+    } else {
+        PathBuf::from(unsafe { utils::convert_char_ptr_to_string(cache_path) }.unwrap())
+    };
+
+    let verification = if verify_content {
+        rubydex::snapshot::manifest::Verification::Content
+    } else {
+        rubydex::snapshot::manifest::Verification::Metadata
+    };
+
+    with_mut_graph(pointer, |graph| {
+        let (errors, outcome) = rubydex::snapshot::load_or_index(
+            graph,
+            &roots,
+            &cache_path,
+            verification,
+            indexing::IndexerBackend::RubyIndexer,
+        );
+
+        let stats = match outcome {
+            rubydex::snapshot::CacheOutcome::Miss => CIndexCacheStats {
+                cache_hit: false,
+                reindexed: 0,
+                removed: 0,
+            },
+            rubydex::snapshot::CacheOutcome::Hit { reindexed, removed } => CIndexCacheStats {
+                cache_hit: true,
+                reindexed,
+                removed,
+            },
+        };
+        unsafe { *out_stats = stats };
+
+        let all_errors: Vec<String> = errors.into_iter().map(|e| e.to_string()).collect();
+
+        if all_errors.is_empty() {
+            unsafe { *error_count = 0 };
+            return ptr::null();
+        }
+
+        let c_strings: Vec<*const c_char> = all_errors
+            .into_iter()
+            .filter_map(|string| {
+                CString::new(string)
+                    .ok()
+                    .map(|c_string| c_string.into_raw().cast_const())
+            })
+            .collect();
+
+        unsafe { *error_count = c_strings.len() };
+
+        let boxed = c_strings.into_boxed_slice();
+        Box::into_raw(boxed).cast::<*const c_char>()
+    })
+}
+
 /// Checks the integrity of the graph and returns an array of error message strings. Returns NULL if there are no
 /// errors. Caller must free with `free_c_string_array`.
 ///

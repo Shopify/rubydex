@@ -7,6 +7,12 @@ foundation to power a variety of tools, such as type checkers, linters, language
 
 ## Usage
 
+Rubydex caches the index by default. The first run indexes all files and writes a snapshot file.
+Later runs read the snapshot and index only the files that changed since the last run.
+The snapshot file lives under the user cache directory, in a file named for the workspace.
+Set `XDG_CACHE_HOME` to change the user cache directory.
+Pass `--no-cache` on the command line, or `cache: false` to `index_workspace` in the Ruby API, to skip the cache.
+
 Both Ruby and Rust APIs are made available through a gem and a crate, respectively. Here's a simple example
 of using the Ruby API:
 
@@ -15,11 +21,11 @@ of using the Ruby API:
 graph = Rubydex::Graph.new
 # Configuring graph LSP encoding
 graph.encoding = "utf16"
-# Index the entire workspace with all dependencies
+# Index the entire workspace with all dependencies. This reads a cached snapshot when one exists,
+# indexes only the files that changed, and resolves them, all in one call.
 graph.index_workspace
-# Or index specific file paths
+# Or index specific file paths, bypassing the cache. This does not resolve; call `resolve` yourself.
 graph.index_all(["path/to/file.rb"])
-# Transform the initially collected information into its semantic understanding by running resolution
 graph.resolve
 # Get all diagnostics acquired during the analysis
 graph.diagnostics
@@ -88,7 +94,6 @@ A resolved `Rubydex::Graph` can be shared across Ractors without copying:
 ```ruby
 graph = Rubydex::Graph.new
 graph.index_workspace
-graph.resolve
 Ractor.make_shareable(graph)
 
 # Worker Ractors can now read the graph in parallel
@@ -138,7 +143,6 @@ From Ruby:
 ```ruby
 graph = Rubydex::Graph.new
 graph.index_workspace
-graph.resolve
 
 # Parse once, then run against a graph. `run` executes the query and returns the result set.
 query = Rubydex::Query.parse("MATCH (c:Class) RETURN c.name")
