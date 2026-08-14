@@ -160,10 +160,10 @@ Put rule files under `rubydex_linter/rules`. Each rule must inherit from `Rubyde
 Run the linter:
 
 ```bash
-bundle exec rdx lint [PATH]
+bundle exec rdx lint
 ```
 
-If you omit `PATH`, Rubydex uses the current directory.
+Rubydex uses the bundle root, or the current directory when no bundle is available.
 
 Configure a rule in `rubydex.toml`:
 

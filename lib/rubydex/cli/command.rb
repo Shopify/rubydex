@@ -137,6 +137,13 @@ module Rubydex
         abort_with_usage(e.message)
       end
 
+      #: -> String
+      def current_workspace_path
+        Bundler.root.to_s
+      rescue Bundler::GemfileNotFound
+        Dir.pwd
+      end
+
       # Builds the workspace graph, sending progress messages to `progress_io`.
       #: (IO progress_io, ?workspace_path: String, ?config: Rubydex::Config) -> Rubydex::Graph
       def build_graph(progress_io, workspace_path: Dir.pwd, config: Rubydex::Config.load(workspace_path))

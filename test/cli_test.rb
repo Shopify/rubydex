@@ -60,7 +60,7 @@ class CLITest < Minitest::Test
     assert_equal("query", Rubydex::CLI::Command::Query.command_name)
     assert_equal("query <CYPHER>", Rubydex::CLI::Command::Query.usage_form)
     assert_equal("console", Rubydex::CLI::Command::Console.usage_form)
-    assert_equal("lint [PATH]", Rubydex::CLI::Command::Lint.usage_form)
+    assert_equal("lint", Rubydex::CLI::Command::Lint.usage_form)
   end
 
   def test_commands_are_listed_alphabetically
@@ -243,6 +243,16 @@ class CLITest < Minitest::Test
     end
   end
 
+  def test_lint_help_lists_explain
+    result = rdx("lint", "--help")
+
+    assert_success_status(result)
+    assert_stdout_includes_pattern(
+      result,
+      /^Commands:\n  explain <RULE>\s{2,}Print documentation for matching linter rules\n\nOptions:\n    -h, --help\s+Show this help$/,
+    )
+  end
+
   def test_every_command_reports_an_invalid_option_with_the_usage
     ["query", "console", "lint", "mcp"].each do |command|
       result = rdx(command, "--bogus-flag")
@@ -276,6 +286,149 @@ class CLITest < Minitest::Test
     refute_stderr_includes(result, "Usage: rdx <command> [options]")
   end
 
+  def test_explain_reports_all_rules_with_a_matching_name
+    with_context do |context|
+      context.write!("rubydex_linter/rules/first_shared_rule.rb", <<~RUBY)
+        module ExplainDuplicateFixtures
+          module First
+            # Flags raw SQL built through application query helpers.
+            #
+            # Prefer parameter binding instead.
+            class SharedRule < Rubydex::Linter::Rule
+              def severity = Rubydex::Severity::Error
+              def lint; end
+            end
+          end
+        end
+      RUBY
+
+      context.write!("rubydex_linter/rules/second_shared_rule.rb", <<~RUBY)
+        module ExplainDuplicateFixtures
+          class SharedBaseRule < Rubydex::Linter::Rule
+            def severity = Rubydex::Severity::Error
+            def lint; end
+          end
+
+          module Second
+            class SharedRule < ExplainDuplicateFixtures::SharedBaseRule
+              def severity = Rubydex::Severity::Error
+              def lint; end
+            end
+          end
+        end
+      RUBY
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("lint", "explain", "SharedRule")
+
+      assert_success_status(result)
+      assert_stdout_equals(<<~DOCS, result)
+        ExplainDuplicateFixtures::First::SharedRule
+
+        Flags raw SQL built through application query helpers.
+
+        Prefer parameter binding instead.
+
+        ExplainDuplicateFixtures::Second::SharedRule: no documentation available.
+      DOCS
+    end
+  end
+
+  def test_explain_accepts_a_partially_qualified_rule_name
+    with_context do |context|
+      context.write!("rubydex_linter/rules/exact_rule.rb", <<~RUBY)
+        module ExplainExactFixtures
+          # Flags exact matches.
+          class ExactRule < Rubydex::Linter::Rule
+            def severity = Rubydex::Severity::Error
+            def lint; end
+          end
+        end
+      RUBY
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+
+      result = rdx("lint", "explain", "ExactFixtures::ExactRule")
+
+      assert_success_status(result)
+      assert_stdout_equals(<<~DOCS, result)
+        ExplainExactFixtures::ExactRule
+
+        Flags exact matches.
+      DOCS
+    end
+  end
+
+  def test_explain_rejects_an_unknown_rule
+    with_context do |context|
+      context.write!("rubydex_linter/rules/known_rule.rb", <<~RUBY)
+        class ExplainKnownRule < Rubydex::Linter::Rule
+          def severity = Rubydex::Severity::Error
+          def lint; end
+        end
+      RUBY
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("lint", "explain", "ExplainKnownFixtures::MissingRule")
+
+      refute_success_status(result)
+      assert_empty_stdout(result)
+      assert_stderr_includes(result, "Rule does not exist: ExplainKnownFixtures::MissingRule")
+    end
+  end
+
+  def test_explain_uses_the_current_directory_without_a_bundle
+    with_context do |context|
+      context.write!("rubydex_linter/rules/fallback_rule.rb", <<~RUBY)
+        module ExplainFallbackFixtures
+          # Flags fallback behavior.
+          class Rule < Rubydex::Linter::Rule
+            def severity = Rubydex::Severity::Error
+            def lint; end
+          end
+        end
+      RUBY
+
+      ENV.stubs(:[]).with("BUNDLE_GEMFILE").returns(nil)
+      Bundler.stubs(:root).raises(Bundler::GemfileNotFound)
+      result = rdx("lint", "explain", "ExplainFallbackFixtures::Rule", chdir: context.absolute_path)
+
+      assert_success_status(result)
+      assert_stdout_equals(<<~DOCS, result)
+        ExplainFallbackFixtures::Rule
+
+        Flags fallback behavior.
+      DOCS
+    end
+  end
+
+  def test_explain_requires_a_rule_name
+    result = rdx("lint", "explain")
+
+    refute_success_status(result)
+    assert_empty_stdout(result)
+    assert_stderr_includes(result, "`lint explain` requires a rule name argument")
+    assert_stderr_includes(result, "Usage: rdx lint explain <RULE>")
+  end
+
+  def test_explain_rejects_extra_arguments
+    result = rdx("lint", "explain", "Rubydex::Linter::Rules::RuleStructure", "workspace")
+
+    refute_success_status(result)
+    assert_empty_stdout(result)
+    assert_stderr_includes(result, "unexpected argument: workspace")
+    assert_stderr_includes(result, "Usage: rdx lint explain <RULE>")
+  end
+
+  def test_lint_rejects_a_workspace_argument
+    result = rdx("lint", "workspace")
+
+    refute_success_status(result)
+    assert_empty_stdout(result)
+    assert_stderr_includes(result, "unexpected argument: workspace")
+    assert_stderr_includes(result, "Usage: rdx lint")
+  end
+
   def test_lint_reports_a_rule_diagnostic_with_related_information
     with_context do |context|
       context.write!("app.rb", "class Foo; end\nclass Foo; end\n")
@@ -283,7 +436,8 @@ class CLITest < Minitest::Test
         .with(context.absolute_path)
       Rubydex::Linter::Rule.stubs(:subclasses).returns([CLITestProjectErrorRule])
 
-      result = rdx("lint", context.absolute_path)
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("lint")
 
       refute_success_status(result)
       assert_stdout_includes(
@@ -302,6 +456,7 @@ class CLITest < Minitest::Test
         result,
         /\d+ files inspected, 1 offense detected: 1 error, 0 warnings, 0 info, 0 hints/,
       )
+      assert_stdout_includes(result, "For more information about a rule, run `rdx lint explain RuleName`.")
       refute_stdout_includes(result, context.absolute_path)
       assert_stderr_includes(result, "Indexing workspace...")
       assert_stderr_includes(result, "Resolving graph...")
@@ -316,7 +471,8 @@ class CLITest < Minitest::Test
         .with(context.absolute_path)
       Rubydex::Linter::Rule.stubs(:subclasses).returns([CLITestProjectErrorRule])
 
-      result = rdx("lint", context.absolute_path)
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("lint")
 
       assert_success_status(result)
       assert_stdout_includes_pattern(result, /\d+ files inspected, no offenses detected/)
@@ -328,7 +484,8 @@ class CLITest < Minitest::Test
       context.write!("app.rb", "class App; end\n")
       Rubydex::Linter::Rule.stubs(:subclasses).returns([Rubydex::Linter::Rules::RuleStructure])
 
-      result = rdx("lint", context.absolute_path)
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("lint")
 
       assert_success_status(result)
       assert_stdout_includes_pattern(result, /\d+ files inspected, no offenses detected/)
