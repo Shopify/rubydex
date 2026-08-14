@@ -1435,6 +1435,9 @@ impl<'a> Resolver<'a> {
                 parent_owner_id,
             )))));
             self.graph.add_member(&parent_owner_id, declaration_id, parent_str_id);
+            // A namespace is the first entry of its own ancestor chain, and member lookups only walk that chain. Without
+            // enqueueing this, the Todo keeps an empty `Partial` chain and none of its members can ever be found
+            self.unit_queue.push_back(Unit::Ancestors(declaration_id));
         }
 
         declaration_id
