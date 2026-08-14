@@ -2,8 +2,11 @@
 
 require "bundler"
 require "uri"
+
+# Files that must be loaded before the C extension
 require "rubydex/version"
 require "rubydex/mixin"
+require "rubydex/severity"
 
 begin
   # Load the precompiled version of the library
@@ -19,7 +22,6 @@ require "rubydex/failures"
 require "rubydex/config"
 require "rubydex/location"
 require "rubydex/comment"
-require "rubydex/severity"
 require "rubydex/rule_definition"
 require "rubydex/related_information"
 require "rubydex/diagnostic"

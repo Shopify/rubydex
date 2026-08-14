@@ -331,6 +331,80 @@ class Rubydex::RuleDefinition
   end
 end
 
+module Rubydex::Rules
+  ALL = T.let(T.unsafe(nil), T::Array[T.class_of(Rubydex::RuleDefinition)])
+end
+
+class Rubydex::Rules::ParseError < Rubydex::RuleDefinition
+  class << self
+    sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
+    def default_severity; end
+  end
+end
+
+class Rubydex::Rules::ParseWarning < Rubydex::RuleDefinition
+  class << self
+    sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
+    def default_severity; end
+  end
+end
+
+class Rubydex::Rules::DynamicConstantReference < Rubydex::RuleDefinition
+  class << self
+    sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
+    def default_severity; end
+  end
+end
+
+class Rubydex::Rules::DynamicSingletonDefinition < Rubydex::RuleDefinition
+  class << self
+    sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
+    def default_severity; end
+  end
+end
+
+class Rubydex::Rules::DynamicAncestor < Rubydex::RuleDefinition
+  class << self
+    sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
+    def default_severity; end
+  end
+end
+
+class Rubydex::Rules::TopLevelMixinSelf < Rubydex::RuleDefinition
+  class << self
+    sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
+    def default_severity; end
+  end
+end
+
+class Rubydex::Rules::InvalidConstantVisibility < Rubydex::RuleDefinition
+  class << self
+    sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
+    def default_severity; end
+  end
+end
+
+class Rubydex::Rules::InvalidMethodVisibility < Rubydex::RuleDefinition
+  class << self
+    sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
+    def default_severity; end
+  end
+end
+
+class Rubydex::Rules::UndefinedMethodVisibilityTarget < Rubydex::RuleDefinition
+  class << self
+    sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
+    def default_severity; end
+  end
+end
+
+class Rubydex::Rules::UndefinedConstantVisibilityTarget < Rubydex::RuleDefinition
+  class << self
+    sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
+    def default_severity; end
+  end
+end
+
 class Rubydex::RelatedInformation
   sig { params(message: String, location: Rubydex::Location).void }
   def initialize(message, location); end

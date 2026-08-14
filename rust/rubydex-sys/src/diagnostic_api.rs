@@ -3,7 +3,7 @@
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
 use libc::c_char;
-use rubydex::diagnostic::Severity;
+use rubydex::diagnostic::{Rule, Severity};
 use std::{ffi::CString, mem, ptr};
 
 /// C-compatible enum representing diagnostic severity levels.
@@ -24,6 +24,63 @@ impl From<Severity> for DiagnosticSeverity {
             Severity::Information => DiagnosticSeverity::Information,
             Severity::Hint => DiagnosticSeverity::Hint,
         }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct CRuleDefinition {
+    pub name: *const c_char,
+    pub name_length: usize,
+    pub default_severity: DiagnosticSeverity,
+}
+
+impl From<Rule> for CRuleDefinition {
+    fn from(rule: Rule) -> Self {
+        let name = rule.name();
+
+        Self {
+            name: name.as_ptr().cast::<c_char>(),
+            name_length: name.len(),
+            default_severity: DiagnosticSeverity::from(rule.default_severity()),
+        }
+    }
+}
+
+#[repr(C)]
+pub struct CRuleDefinitionArray {
+    pub items: *mut CRuleDefinition,
+    pub len: usize,
+}
+
+/// Returns a definition for every rule the graph can report. Caller must free it with `rdx_rule_definitions_free`.
+#[unsafe(no_mangle)]
+pub extern "C" fn rdx_rule_definitions() -> CRuleDefinitionArray {
+    let items = Rule::all()
+        .iter()
+        .copied()
+        .map(CRuleDefinition::from)
+        .collect::<Box<[CRuleDefinition]>>();
+
+    CRuleDefinitionArray {
+        len: items.len(),
+        items: Box::into_raw(items).cast::<CRuleDefinition>(),
+    }
+}
+
+/// Frees an array previously returned by `rdx_rule_definitions`.
+///
+/// # Safety
+///
+/// - `definitions` must have been returned by `rdx_rule_definitions` and must not be used afterwards.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_rule_definitions_free(definitions: CRuleDefinitionArray) {
+    if definitions.items.is_null() {
+        return;
+    }
+
+    unsafe {
+        let _ = Box::from_raw(ptr::slice_from_raw_parts_mut(definitions.items, definitions.len));
     }
 }
 
