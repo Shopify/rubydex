@@ -11,6 +11,12 @@ module Rubydex
           name #: as !nil
             .split("::").last #: as !nil
         end
+
+        # @abstract
+        #: () -> singleton(Severity::Base)
+        def default_severity
+          raise NotImplementedError, "Subclasses must implement the default_severity method"
+        end
       end
 
       #: Graph
@@ -30,15 +36,9 @@ module Rubydex
         @verified_severity = nil #: singleton(Severity::Base)?
       end
 
-      # @abstract
-      #: () -> singleton(Severity::Base)
-      def severity
-        raise NotImplementedError, "Subclasses must implement the severity method"
-      end
-
       #: () -> singleton(Severity::Base)
       def verified_severity
-        @verified_severity ||= config.severity_for(self.class, default: severity)
+        @verified_severity ||= config.severity_for(self.class)
       end
 
       # @abstract

@@ -22,10 +22,12 @@ module Rubydex
         ].freeze #: Array[String]
         TEST_FILE_PATTERNS = ["test/**/*", "**/test/**/*"].freeze #: Array[String]
 
-        # @override
-        #: -> singleton(Severity::Base)
-        def severity
-          Severity::Error
+        class << self
+          # @override
+          #: -> singleton(Severity::Base)
+          def default_severity
+            Severity::Error
+          end
         end
 
         # @override

@@ -9,7 +9,9 @@ class LinterTest < Minitest::Test
   include Test::Helpers::WithContext
 
   class WarningRule < Rubydex::Linter::Rule
-    def severity = Rubydex::Severity::Warning
+    class << self
+      def default_severity = Rubydex::Severity::Warning
+    end
 
     def lint
       add_diagnostic(
@@ -29,7 +31,9 @@ class LinterTest < Minitest::Test
   end
 
   class ErrorRule < Rubydex::Linter::Rule
-    def severity = Rubydex::Severity::Error
+    class << self
+      def default_severity = Rubydex::Severity::Error
+    end
 
     def lint
       add_diagnostic(
@@ -46,12 +50,17 @@ class LinterTest < Minitest::Test
   end
 
   class SilentRule < Rubydex::Linter::Rule
-    def severity = Rubydex::Severity::Hint
+    class << self
+      def default_severity = Rubydex::Severity::Hint
+    end
+
     def lint; end
   end
 
   class OutsideWorkspaceRule < Rubydex::Linter::Rule
-    def severity = Rubydex::Severity::Information
+    class << self
+      def default_severity = Rubydex::Severity::Information
+    end
 
     def lint
       sibling = File.join(File.dirname(graph.workspace_path), "#{File.basename(graph.workspace_path)}-other", "file.rb")
@@ -66,7 +75,9 @@ class LinterTest < Minitest::Test
   end
 
   class DependencyPathRule < Rubydex::Linter::Rule
-    def severity = Rubydex::Severity::Information
+    class << self
+      def default_severity = Rubydex::Severity::Information
+    end
 
     def lint
       path = File.join(graph.workspace_path, "vendor/bundle/gems/example.rb")
@@ -81,7 +92,9 @@ class LinterTest < Minitest::Test
   end
 
   class ExcludedPrimaryRule < Rubydex::Linter::Rule
-    def severity = Rubydex::Severity::Information
+    class << self
+      def default_severity = Rubydex::Severity::Information
+    end
 
     def lint
       add_diagnostic("Excluded primary location.", workspace_location("components/legacy/example.rb"))
