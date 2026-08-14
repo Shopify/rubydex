@@ -6,10 +6,11 @@ use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::built_in::{OBJECT_ID, add_built_in_data};
-use crate::model::declaration::{Ancestor, Declaration, Namespace};
-use crate::model::definitions::{Definition, MethodVisibilityDefinition, Receiver};
-use crate::model::document::Document;
+use crate::model::declaration::{Ancestor, ArchivedDeclaration, Declaration, Namespace};
+use crate::model::definitions::{ArchivedDefinition, Definition, MethodVisibilityDefinition, Receiver};
+use crate::model::document::{ArchivedDocument, Document};
 use crate::model::encoding::Encoding;
+use crate::model::id::Id;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{
     ConstantReferenceId, DeclarationId, DefinitionId, MethodReferenceId, NameId, StringId, UriId,
@@ -21,10 +22,11 @@ use crate::model::string_ref::StringRef;
 use crate::model::visibility::Visibility;
 use crate::{assert_mem_size, assert_send_sync};
 use crate::{query, stats};
+use rkyv::rend::u64_le;
 
 /// An entity whose validity depends on a particular `NameId`.
 /// Used as the value type in the `name_dependents` reverse index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum NameDependent {
     Definition(DefinitionId),
     Reference(ConstantReferenceId),
@@ -47,7 +49,7 @@ enum InvalidationItem {
 assert_mem_size!(InvalidationItem, 16);
 
 /// A work item produced by graph mutations (update/delete) that needs resolution.
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum Unit {
     /// A definition that defines a constant and might require resolution
     Definition(DefinitionId),
@@ -60,7 +62,7 @@ assert_mem_size!(Unit, 16);
 
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
-#[derive(Default, Debug)]
+#[derive(Default, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct Graph {
     // Map of declaration nodes
     declarations: IdentityHashMap<DeclarationId, Declaration>,
@@ -94,6 +96,80 @@ pub struct Graph {
 }
 assert_mem_size!(Graph, 368);
 assert_send_sync!(Graph);
+
+/// The archived counterpart of an [`IdentityHashMap`], as rkyv lays it out inside a snapshot.
+/// Its keys are the bare little-endian `u64` that every [`Id`](crate::model::id::Id) archives as.
+pub type ArchivedIdentityHashMap<K, V> = <IdentityHashMap<K, V> as rkyv::Archive>::Archived;
+
+/// Read-only access to a [`Graph`] that still lives in a snapshot's memory map.
+///
+/// rkyv derives `ArchivedGraph` with the same private fields as [`Graph`], so these accessors are
+/// what a consumer outside this module has. They mirror the accessors on [`Graph`] and never
+/// allocate: every one of them returns a reference into the mapped file.
+impl ArchivedGraph {
+    /// Turns an owned id into the key an archived map is indexed by.
+    fn key<T>(id: &Id<T>) -> u64_le {
+        u64_le::from_native(id.get())
+    }
+
+    #[must_use]
+    pub fn declarations(&self) -> &ArchivedIdentityHashMap<DeclarationId, Declaration> {
+        &self.declarations
+    }
+
+    #[must_use]
+    pub fn documents(&self) -> &ArchivedIdentityHashMap<UriId, Document> {
+        &self.documents
+    }
+
+    #[must_use]
+    pub fn definitions(&self) -> &ArchivedIdentityHashMap<DefinitionId, Definition> {
+        &self.definitions
+    }
+
+    #[must_use]
+    pub fn names(&self) -> &ArchivedIdentityHashMap<NameId, NameRef> {
+        &self.names
+    }
+
+    #[must_use]
+    pub fn strings(&self) -> &ArchivedIdentityHashMap<StringId, StringRef> {
+        &self.strings
+    }
+
+    #[must_use]
+    pub fn constant_references(&self) -> &ArchivedIdentityHashMap<ConstantReferenceId, ConstantReference> {
+        &self.constant_references
+    }
+
+    #[must_use]
+    pub fn method_references(&self) -> &ArchivedIdentityHashMap<MethodReferenceId, MethodRef> {
+        &self.method_references
+    }
+
+    /// Looks a declaration up by id. Ids are content hashes, so an id computed in this process
+    /// addresses the right node in an archive written by another one.
+    #[must_use]
+    pub fn declaration(&self, id: DeclarationId) -> Option<&ArchivedDeclaration> {
+        self.declarations.get(&Self::key(&id))
+    }
+
+    #[must_use]
+    pub fn definition(&self, id: DefinitionId) -> Option<&ArchivedDefinition> {
+        self.definitions.get(&Self::key(&id))
+    }
+
+    #[must_use]
+    pub fn document(&self, id: UriId) -> Option<&ArchivedDocument> {
+        self.documents.get(&Self::key(&id))
+    }
+
+    /// Looks a declaration up by fully qualified name, the archived twin of [`Graph::get`].
+    #[must_use]
+    pub fn declaration_by_name(&self, name: &str) -> Option<&ArchivedDeclaration> {
+        self.declaration(declaration_id_from_lookup_name(name))
+    }
+}
 
 impl Graph {
     #[must_use]

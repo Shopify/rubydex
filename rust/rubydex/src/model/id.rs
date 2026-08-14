@@ -1,4 +1,6 @@
 use std::{marker::PhantomData, num::NonZeroU64, ops::Deref};
+
+use rkyv::rend::u64_le;
 use xxhash_rust::xxh3;
 
 /// Creates an ID by hashing fixed-width integer components in little-endian order.
@@ -87,6 +89,35 @@ impl<T, const N: usize> From<[&[u8]; N]> for Id<T> {
         }
 
         Self::new(hasher.digest())
+    }
+}
+
+/// `Id<T>` is a hashed [`NonZeroU64`] paired with a zero-sized marker, so it archives as a bare
+/// little-endian `u64`. Deriving instead would leak the marker into the archived type and force
+/// every marker to implement rkyv's traits; this way an archived map is keyed by [`u64_le`], which
+/// is exactly the eight bytes the id already is.
+///
+/// Every other awkward type in the model follows this same three-impl shape: `Archive` names the
+/// archived form, `Serialize` has nothing to write beyond the value itself, and `Deserialize`
+/// rebuilds the owned type from the archived one.
+impl<T> rkyv::Archive for Id<T> {
+    type Archived = u64_le;
+    type Resolver = ();
+
+    fn resolve(&self, _resolver: Self::Resolver, out: rkyv::Place<Self::Archived>) {
+        out.write(u64_le::from_native(self.value.get()));
+    }
+}
+
+impl<T, S: rkyv::rancor::Fallible + ?Sized> rkyv::Serialize<S> for Id<T> {
+    fn serialize(&self, _serializer: &mut S) -> Result<Self::Resolver, S::Error> {
+        Ok(())
+    }
+}
+
+impl<T, D: rkyv::rancor::Fallible + ?Sized> rkyv::Deserialize<Id<T>, D> for u64_le {
+    fn deserialize(&self, _deserializer: &mut D) -> Result<Id<T>, D::Error> {
+        Ok(Id::new(self.to_native()))
     }
 }
 

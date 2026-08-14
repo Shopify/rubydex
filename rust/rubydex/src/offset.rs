@@ -10,7 +10,7 @@ use crate::model::document::Document;
 ///
 /// An `Offset` tracks a contiguous span of bytes from `start` to `end` within a file. This is useful for
 /// representing the location of tokens, AST nodes, or other text spans in source code.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct Offset {
     /// The starting byte offset (inclusive)
     start: u32,

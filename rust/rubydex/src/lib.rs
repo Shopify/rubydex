@@ -20,6 +20,7 @@ pub(crate) mod path_helpers;
 pub mod position;
 pub mod query;
 pub mod resolution;
+pub mod snapshot;
 pub mod stats;
 
 #[cfg(any(test, feature = "test_utils"))]

@@ -21,7 +21,7 @@ const DEFAULT_EXCLUDED_DIRECTORIES: &[&str] = &[
 ];
 
 /// The graph's settings, read from the `[graph]` section of the configuration file
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct GraphSettings {
     /// Patterns to exclude from file discovery during indexing, on top of the built-in defaults. Stored as written and
     /// only joined with the workspace path when read, so that a pattern cannot outlive the configuration it came from
@@ -69,7 +69,7 @@ impl GraphSettings {
 }
 
 /// The setting of a single linter rule, read from a `[linter.rules.RuleName]` table
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct Rule {
     name: Box<str>,
     enabled: bool,
@@ -145,7 +145,7 @@ impl Rule {
 }
 
 /// The linter's settings, read from the `[linter]` section of the configuration file
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct LinterSettings {
     rules: Box<[Rule]>,
 }
@@ -179,15 +179,53 @@ impl LinterSettings {
     }
 }
 
+/// `Box<Path>` cannot derive rkyv's traits: `Path` is unsized and foreign, so it has no `Archive`
+/// impl of its own. It travels through the archive as an owned `String` instead, and is rebuilt
+/// into a `Box<Path>` on the way back out.
+pub struct BoxedPathAsString;
+
+impl rkyv::with::ArchiveWith<Box<Path>> for BoxedPathAsString {
+    type Archived = rkyv::Archived<String>;
+    type Resolver = rkyv::Resolver<String>;
+
+    fn resolve_with(field: &Box<Path>, resolver: Self::Resolver, out: rkyv::Place<Self::Archived>) {
+        let path = field.to_string_lossy().into_owned();
+        rkyv::Archive::resolve(&path, resolver, out);
+    }
+}
+
+impl<S> rkyv::with::SerializeWith<Box<Path>, S> for BoxedPathAsString
+where
+    S: rkyv::rancor::Fallible + ?Sized,
+    String: rkyv::Serialize<S>,
+{
+    fn serialize_with(field: &Box<Path>, serializer: &mut S) -> Result<Self::Resolver, S::Error> {
+        let path = field.to_string_lossy().into_owned();
+        rkyv::Serialize::serialize(&path, serializer)
+    }
+}
+
+impl<D> rkyv::with::DeserializeWith<rkyv::Archived<String>, Box<Path>, D> for BoxedPathAsString
+where
+    D: rkyv::rancor::Fallible + ?Sized,
+    rkyv::Archived<String>: rkyv::Deserialize<String, D>,
+{
+    fn deserialize_with(field: &rkyv::Archived<String>, deserializer: &mut D) -> Result<Box<Path>, D::Error> {
+        let path: String = rkyv::Deserialize::deserialize(field, deserializer)?;
+        Ok(PathBuf::from(path).into_boxed_path())
+    }
+}
+
 /// The configuration of a workspace, parsed from its `rubydex.toml` and shared by all built-in tools. It carries both
 /// the settings that are global to every tool, such as the workspace being analyzed, and the typed settings of each
 /// tool's own section (e.g. `[graph]`). Every section is parsed eagerly, so that all validation happens at load time and
 /// unknown sections or settings are rejected. Load the file once and hand the configuration to each consumer, so that
 /// none of them has to read it again.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct Config {
     /// Root directory of the workspace being analyzed, which is where its configuration file lives. Global, and not
     /// configurable through the file itself, since it is what says where that file is.
+    #[rkyv(with = BoxedPathAsString)]
     workspace_path: Box<Path>,
     graph: GraphSettings,
     linter: LinterSettings,

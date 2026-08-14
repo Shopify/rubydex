@@ -46,6 +46,30 @@ bitflags! {
 }
 assert_mem_size!(DefinitionFlags, 1);
 
+/// `bitflags!` hides the backing field behind a private struct, so `Archive`/`Serialize`/
+/// `Deserialize` cannot be derived. Archive the flags as their backing `u8` and rebuild with
+/// `from_bits_truncate` so unknown bits round-trip safely.
+impl rkyv::Archive for DefinitionFlags {
+    type Archived = u8;
+    type Resolver = ();
+
+    fn resolve(&self, _resolver: Self::Resolver, out: rkyv::Place<Self::Archived>) {
+        out.write(self.bits());
+    }
+}
+
+impl<S: rkyv::rancor::Fallible + ?Sized> rkyv::Serialize<S> for DefinitionFlags {
+    fn serialize(&self, _serializer: &mut S) -> Result<Self::Resolver, S::Error> {
+        Ok(())
+    }
+}
+
+impl<D: rkyv::rancor::Fallible + ?Sized> rkyv::Deserialize<DefinitionFlags, D> for u8 {
+    fn deserialize(&self, _deserializer: &mut D) -> Result<DefinitionFlags, D::Error> {
+        Ok(DefinitionFlags::from_bits_truncate(*self))
+    }
+}
+
 impl DefinitionFlags {
     #[must_use]
     pub fn is_deprecated(&self) -> bool {
@@ -63,7 +87,7 @@ impl DefinitionFlags {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum Definition {
     Class(Box<ClassDefinition>),
     SingletonClass(Box<SingletonClassDefinition>),
@@ -196,7 +220,7 @@ impl Definition {
 
 /// Represents a mixin: include, prepend, or extend.
 /// During resolution, `Extend` mixins are attached to the singleton class.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum Mixin {
     Include(IncludeDefinition),
     Prepend(PrependDefinition),
@@ -217,7 +241,7 @@ impl Mixin {
 
 macro_rules! mixin_definition {
     ($variant:ident, $name:ident) => {
-        #[derive(Debug, Clone)]
+        #[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
         pub struct $name {
             constant_reference_id: ConstantReferenceId,
         }
@@ -249,7 +273,7 @@ mixin_definition!(Extend, ExtendDefinition);
 /// class Foo
 /// end
 /// ```
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct ClassDefinition {
     name_id: NameId,
     uri_id: UriId,
@@ -371,7 +395,7 @@ impl ClassDefinition {
 ///   def baz; end
 /// end
 /// ```
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct SingletonClassDefinition {
     /// The name of this singleton class (e.g., `<Foo>` for `class << self` inside `class Foo`)
     name_id: NameId,
@@ -479,7 +503,7 @@ impl SingletonClassDefinition {
 /// module Foo
 /// end
 /// ```
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct ModuleDefinition {
     name_id: NameId,
     uri_id: UriId,
@@ -582,7 +606,7 @@ impl ModuleDefinition {
 /// ```ruby
 /// FOO = 1
 /// ```
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct ConstantDefinition {
     name_id: NameId,
     uri_id: UriId,
@@ -656,7 +680,7 @@ impl ConstantDefinition {
 /// module Foo; end
 /// ALIAS = Foo
 /// ```
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct ConstantAliasDefinition {
     alias_constant: ConstantDefinition,
     target_name_id: NameId,
@@ -719,7 +743,7 @@ impl ConstantAliasDefinition {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct ConstantVisibilityDefinition {
     receiver: Option<NameId>,
     target: StringId,
@@ -803,7 +827,7 @@ impl ConstantVisibilityDefinition {
 }
 assert_mem_size!(ConstantVisibilityDefinition, 64);
 
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct MethodVisibilityDefinition {
     str_id: StringId,
     visibility: Visibility,
@@ -883,7 +907,7 @@ assert_mem_size!(MethodVisibilityDefinition, 56);
 /// Currently only supports the parameter names and kinds.
 pub type Signature = Box<[Parameter]>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum Signatures {
     /// A single method signature, for definitions without overloads.
     ///
@@ -915,7 +939,7 @@ impl Signatures {
 /// def foo(bar, baz)
 /// end
 /// ```
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct MethodDefinition {
     str_id: StringId,
     uri_id: UriId,
@@ -932,7 +956,7 @@ pub struct MethodDefinition {
 assert_mem_size!(MethodDefinition, 104);
 
 /// The receiver of a singleton method definition.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum Receiver {
     /// `def self.foo` - receiver is the enclosing definition (class, module, singleton class or DSL)
     SelfReceiver(DefinitionId),
@@ -1027,7 +1051,7 @@ impl MethodDefinition {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum Parameter {
     RequiredPositional(ParameterStruct),
     OptionalPositional(ParameterStruct),
@@ -1058,7 +1082,7 @@ impl Parameter {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct ParameterStruct {
     offset: Offset,
     str: StringId,
@@ -1088,7 +1112,7 @@ impl ParameterStruct {
 /// ```ruby
 /// attr_accessor :foo
 /// ```
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct AttrAccessorDefinition {
     str_id: StringId,
     uri_id: UriId,
@@ -1169,7 +1193,7 @@ impl AttrAccessorDefinition {
 /// ```ruby
 /// attr_reader :foo
 /// ```
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct AttrReaderDefinition {
     str_id: StringId,
     uri_id: UriId,
@@ -1250,7 +1274,7 @@ impl AttrReaderDefinition {
 /// ```ruby
 /// attr_writer :foo
 /// ```
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct AttrWriterDefinition {
     str_id: StringId,
     uri_id: UriId,
@@ -1331,7 +1355,7 @@ impl AttrWriterDefinition {
 /// ```ruby
 /// $foo = 1
 /// ```
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct GlobalVariableDefinition {
     str_id: StringId,
     uri_id: UriId,
@@ -1404,7 +1428,7 @@ impl GlobalVariableDefinition {
 /// ```ruby
 /// @foo = 1
 /// ```
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct InstanceVariableDefinition {
     str_id: StringId,
     uri_id: UriId,
@@ -1477,7 +1501,7 @@ impl InstanceVariableDefinition {
 /// ```ruby
 /// @@foo = 1
 /// ```
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct ClassVariableDefinition {
     str_id: StringId,
     uri_id: UriId,
@@ -1544,7 +1568,7 @@ impl ClassVariableDefinition {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct MethodAliasDefinition {
     new_name_str_id: StringId,
     old_name_str_id: StringId,
@@ -1634,7 +1658,7 @@ impl MethodAliasDefinition {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct GlobalVariableAliasDefinition {
     new_name_str_id: StringId,
     old_name_str_id: StringId,

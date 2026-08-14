@@ -10,24 +10,29 @@ use crate::model::ids::{ConstantReferenceId, DefinitionId, MethodReferenceId};
 
 // Represents a document currently loaded into memory. Identified by its unique URI, it holds the edges to all
 // definitions and references discovered in it
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct Document {
     uri: String,
-    line_index: LineIndex,
+    /// The document's line index is not archived: `LineIndex` has no public constructor besides
+    /// `LineIndex::new(text)` and no accessible fields, so an archived instance could never be
+    /// rebuilt from its parts. A snapshot therefore skips it, leaving the cell empty until
+    /// [`Document::line_index`] lazily rebuilds it from disk on first use after a restore.
+    #[rkyv(with = rkyv::with::Skip)]
+    line_index: std::sync::OnceLock<LineIndex>,
     definition_ids: Vec<DefinitionId>,
     method_reference_ids: Vec<MethodReferenceId>,
     constant_reference_ids: Vec<ConstantReferenceId>,
     diagnostics: Vec<Diagnostic>,
     content_hash: u64,
 }
-assert_mem_size!(Document, 184);
+assert_mem_size!(Document, 192);
 
 impl Document {
     #[must_use]
     pub fn new(uri: String, source: &str) -> Self {
         Self {
             uri,
-            line_index: LineIndex::new(source),
+            line_index: std::sync::OnceLock::from(LineIndex::new(source)),
             definition_ids: Vec::new(),
             method_reference_ids: Vec::new(),
             constant_reference_ids: Vec::new(),
@@ -46,9 +51,21 @@ impl Document {
         self.content_hash
     }
 
+    /// The line index for this document.
+    ///
+    /// A snapshot does not store the line index, since [`LineIndex`] has no way to be rebuilt
+    /// from archived parts. A document restored from a snapshot rebuilds it lazily, on first
+    /// use, by re-reading the document's own file from disk. This assumes the file has not
+    /// changed since the snapshot was written.
     #[must_use]
     pub fn line_index(&self) -> &LineIndex {
-        &self.line_index
+        self.line_index.get_or_init(|| {
+            let source = self
+                .file_path()
+                .and_then(|path| std::fs::read_to_string(path).ok())
+                .unwrap_or_default();
+            LineIndex::new(&source)
+        })
     }
 
     #[must_use]

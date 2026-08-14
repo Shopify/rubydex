@@ -1,7 +1,7 @@
 use crate::assert_mem_size;
 use line_index::WideEncoding;
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum Encoding {
     #[default]
     Utf8,

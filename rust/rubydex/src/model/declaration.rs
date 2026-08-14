@@ -10,7 +10,7 @@ use crate::model::{
 };
 
 /// A single ancestor in the linearized ancestor chain
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum Ancestor {
     /// A complete ancestor that we have fully linearized
     Complete(DeclarationId),
@@ -20,7 +20,7 @@ pub enum Ancestor {
 assert_mem_size!(Ancestor, 16);
 
 /// The ancestor chain and its current state
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum Ancestors {
     /// A complete linearization of ancestors with all parts resolved
     Complete(Vec<Ancestor>),
@@ -73,7 +73,7 @@ macro_rules! all_namespaces {
 /// Macro to generate a new struct for namespace-like declarations such as classes and modules
 macro_rules! namespace_declaration {
     ($variant:ident, $name:ident) => {
-        #[derive(Debug)]
+        #[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
         pub struct $name {
             core: DeclarationCore<ConstantReferenceId>,
             namespace_store: NamespaceStore,
@@ -112,7 +112,7 @@ macro_rules! namespace_declaration {
 }
 
 /// The core data of a declaration, shared across all of them
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct DeclarationCore<T> {
     /// The fully qualified name of this declaration
     name: Box<str>,
@@ -195,7 +195,7 @@ impl<T: Eq + Hash> DeclarationCore<T> {
 }
 
 /// Storage for namespace data, like ancestors, descendants, members and singleton class
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct NamespaceStore {
     /// The entities that are owned by this declaration. For example, constants and methods that are defined inside of
     /// the namespace. Note that this is a hashmap of unqualified name IDs to declaration IDs. That assists the
@@ -304,7 +304,7 @@ impl Default for NamespaceStore {
 /// A `Declaration` represents the global concept of an entity in Ruby. For example, the class `Foo` may be defined 3
 /// times in different files and the `Foo` declaration is the combination of all of those definitions that contribute to
 /// the same fully qualified name
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum Declaration {
     Namespace(Namespace),
     Constant(Box<ConstantDeclaration>),
@@ -528,7 +528,7 @@ impl Declaration {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum Namespace {
     Class(Box<ClassDeclaration>),
     SingletonClass(Box<SingletonClassDeclaration>),

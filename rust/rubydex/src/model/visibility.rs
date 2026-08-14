@@ -3,7 +3,7 @@ use std::fmt::Display;
 
 use crate::assert_mem_size;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum Visibility {
     Public,
     Protected,

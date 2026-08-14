@@ -1,7 +1,7 @@
 use crate::assert_mem_size;
 use crate::offset::Offset;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct Comment {
     offset: Offset,
     string: String,
