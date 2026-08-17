@@ -63,8 +63,23 @@ pub enum Severity {
     Hint,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum Rule {
+macro_rules! rules {
+    ($($(#[$attribute:meta])* $rule:ident),+ $(,)?) => {
+        #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+        pub enum Rule {
+            $($(#[$attribute])* $rule,)+
+        }
+
+        impl Rule {
+            #[must_use]
+            pub fn all() -> &'static [Self] {
+                &[$(Self::$rule,)+]
+            }
+        }
+    };
+}
+
+rules! {
     // Parsing
     ParseError,
     ParseWarning,
