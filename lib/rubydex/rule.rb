@@ -8,7 +8,7 @@ module Rubydex
   # collected by the graph during the analysis or by the linter afterwards.
   #
   # @abstract
-  class RuleDefinition
+  class Rule
     class << self
       #: () -> String
       def rule_name

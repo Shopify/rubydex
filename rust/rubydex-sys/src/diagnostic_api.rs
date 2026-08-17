@@ -29,13 +29,13 @@ impl From<Severity> for DiagnosticSeverity {
 
 #[repr(C)]
 #[derive(Debug)]
-pub struct CRuleDefinition {
+pub struct CRule {
     pub name: *const c_char,
     pub name_length: usize,
     pub default_severity: DiagnosticSeverity,
 }
 
-impl From<Rule> for CRuleDefinition {
+impl From<Rule> for CRule {
     fn from(rule: Rule) -> Self {
         let name = rule.name();
 
@@ -48,39 +48,35 @@ impl From<Rule> for CRuleDefinition {
 }
 
 #[repr(C)]
-pub struct CRuleDefinitionArray {
-    pub items: *mut CRuleDefinition,
+pub struct CRuleArray {
+    pub items: *mut CRule,
     pub len: usize,
 }
 
-/// Returns a definition for every rule the graph can report. Caller must free it with `rdx_rule_definitions_free`.
+/// Returns every rule the graph can report. Caller must free it with `rdx_rules_free`.
 #[unsafe(no_mangle)]
-pub extern "C" fn rdx_rule_definitions() -> CRuleDefinitionArray {
-    let items = Rule::all()
-        .iter()
-        .copied()
-        .map(CRuleDefinition::from)
-        .collect::<Box<[CRuleDefinition]>>();
+pub extern "C" fn rdx_rules() -> CRuleArray {
+    let items = Rule::all().iter().copied().map(CRule::from).collect::<Box<[CRule]>>();
 
-    CRuleDefinitionArray {
+    CRuleArray {
         len: items.len(),
-        items: Box::into_raw(items).cast::<CRuleDefinition>(),
+        items: Box::into_raw(items).cast::<CRule>(),
     }
 }
 
-/// Frees an array previously returned by `rdx_rule_definitions`.
+/// Frees an array previously returned by `rdx_rules`.
 ///
 /// # Safety
 ///
-/// - `definitions` must have been returned by `rdx_rule_definitions` and must not be used afterwards.
+/// - `rules` must have been returned by `rdx_rules` and must not be used afterwards.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_rule_definitions_free(definitions: CRuleDefinitionArray) {
-    if definitions.items.is_null() {
+pub unsafe extern "C" fn rdx_rules_free(rules: CRuleArray) {
+    if rules.items.is_null() {
         return;
     }
 
     unsafe {
-        let _ = Box::from_raw(ptr::slice_from_raw_parts_mut(definitions.items, definitions.len));
+        let _ = Box::from_raw(ptr::slice_from_raw_parts_mut(rules.items, rules.len));
     }
 }
 

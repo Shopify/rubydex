@@ -155,7 +155,7 @@ puts Rubydex::Query.schema("table")
 
 ### `rdx lint`
 
-Put rule files under `rubydex_linter/rules`. Each rule must inherit from `Rubydex::Linter::Rule`.
+Put rule files under `rubydex_linter/rules`. Each rule must inherit from `Rubydex::Linter::CustomRule`.
 
 Run the linter:
 

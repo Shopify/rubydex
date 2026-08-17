@@ -4,7 +4,7 @@ module Rubydex
   module Linter
     # Base class for semantic lint rules, which collect their diagnostics by walking a resolved graph.
     # @abstract
-    class Rule < RuleDefinition
+    class CustomRule < Rule
       #: Graph
       attr_reader :graph
 

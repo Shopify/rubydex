@@ -21,7 +21,7 @@ class CLITest < Minitest::Test
   include Test::Helpers::WithCLI
   include Test::Helpers::WithContext
 
-  class CLITestProjectErrorRule < Rubydex::Linter::Rule
+  class CLITestProjectErrorRule < Rubydex::Linter::CustomRule
     class << self
       def default_severity = Rubydex::Severity::Error
     end
@@ -294,7 +294,7 @@ class CLITest < Minitest::Test
             # Flags raw SQL built through application query helpers.
             #
             # Prefer parameter binding instead.
-            class SharedRule < Rubydex::Linter::Rule
+            class SharedRule < Rubydex::Linter::CustomRule
               def severity = Rubydex::Severity::Error
               def lint; end
             end
@@ -304,7 +304,7 @@ class CLITest < Minitest::Test
 
       context.write!("rubydex_linter/rules/second_shared_rule.rb", <<~RUBY)
         module ExplainDuplicateFixtures
-          class SharedBaseRule < Rubydex::Linter::Rule
+          class SharedBaseRule < Rubydex::Linter::CustomRule
             def severity = Rubydex::Severity::Error
             def lint; end
           end
@@ -339,7 +339,7 @@ class CLITest < Minitest::Test
       context.write!("rubydex_linter/rules/exact_rule.rb", <<~RUBY)
         module ExplainExactFixtures
           # Flags exact matches.
-          class ExactRule < Rubydex::Linter::Rule
+          class ExactRule < Rubydex::Linter::CustomRule
             def severity = Rubydex::Severity::Error
             def lint; end
           end
@@ -362,7 +362,7 @@ class CLITest < Minitest::Test
   def test_explain_rejects_an_unknown_rule
     with_context do |context|
       context.write!("rubydex_linter/rules/known_rule.rb", <<~RUBY)
-        class ExplainKnownRule < Rubydex::Linter::Rule
+        class ExplainKnownRule < Rubydex::Linter::CustomRule
           def severity = Rubydex::Severity::Error
           def lint; end
         end
@@ -382,7 +382,7 @@ class CLITest < Minitest::Test
       context.write!("rubydex_linter/rules/fallback_rule.rb", <<~RUBY)
         module ExplainFallbackFixtures
           # Flags fallback behavior.
-          class Rule < Rubydex::Linter::Rule
+          class Rule < Rubydex::Linter::CustomRule
             def severity = Rubydex::Severity::Error
             def lint; end
           end
@@ -434,7 +434,7 @@ class CLITest < Minitest::Test
       context.write!("app.rb", "class Foo; end\nclass Foo; end\n")
       Rubydex::Linter::RuleLoader.expects(:load)
         .with(context.absolute_path)
-      Rubydex::Linter::Rule.stubs(:subclasses).returns([CLITestProjectErrorRule])
+      Rubydex::Linter::CustomRule.stubs(:subclasses).returns([CLITestProjectErrorRule])
 
       Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
       result = rdx("lint")
@@ -460,7 +460,7 @@ class CLITest < Minitest::Test
       refute_stdout_includes(result, context.absolute_path)
       assert_stderr_includes(result, "Indexing workspace...")
       assert_stderr_includes(result, "Resolving graph...")
-      assert_stderr_includes(result, "Running 1 rule...")
+      assert_stderr_includes(result, "Linting...")
     end
   end
 
@@ -469,7 +469,7 @@ class CLITest < Minitest::Test
       context.write!("app.rb", "class Bar; end\n")
       Rubydex::Linter::RuleLoader.expects(:load)
         .with(context.absolute_path)
-      Rubydex::Linter::Rule.stubs(:subclasses).returns([CLITestProjectErrorRule])
+      Rubydex::Linter::CustomRule.stubs(:subclasses).returns([CLITestProjectErrorRule])
 
       Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
       result = rdx("lint")
@@ -482,13 +482,29 @@ class CLITest < Minitest::Test
   def test_lint_allows_a_plain_workspace_without_project_rules
     with_context do |context|
       context.write!("app.rb", "class App; end\n")
-      Rubydex::Linter::Rule.stubs(:subclasses).returns([Rubydex::Linter::Rules::RuleStructure])
+      Rubydex::Linter::CustomRule.stubs(:subclasses).returns([Rubydex::Linter::Rules::RuleStructure])
 
       Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
       result = rdx("lint")
 
       assert_success_status(result)
       assert_stdout_includes_pattern(result, /\d+ files inspected, no offenses detected/)
+    end
+  end
+
+  def test_lint_reports_built_in_rules_without_any_custom_rule
+    with_context do |context|
+      context.write!("app.rb", "class Broken\n")
+      Rubydex::Linter::RuleLoader.expects(:load)
+        .with(context.absolute_path)
+      Rubydex::Linter::CustomRule.stubs(:subclasses).returns([])
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("lint")
+
+      refute_success_status(result)
+      assert_stdout_includes(result, "app.rb:1:1: error: ParseError:")
+      refute_stderr_includes(result, "subclasses were loaded")
     end
   end
 

@@ -9,8 +9,8 @@ module Rubydex
       class Lint
         # `rdx lint explain <RULE>` — prints documentation for rules with a matching name.
         class Explain < Command
-          BASE_RULE_NAME = "Rubydex::Linter::Rule" #: String
-          BASE_RULE_PATH = File.expand_path("../../../linter/rule.rb", __dir__) #: String
+          BASE_RULE_NAME = "Rubydex::Linter::CustomRule" #: String
+          BASE_RULE_PATH = File.expand_path("../../../linter/custom_rule.rb", __dir__) #: String
 
           class << self
             #: -> String

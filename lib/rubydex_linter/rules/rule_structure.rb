@@ -11,10 +11,10 @@ module Rubydex
       #
       # The rule directories are `rubydex_linter/rules/` and `lib/rubydex_linter/rules/`.
       # This rule does not report files in those directories that define no rule subclass.
-      class RuleStructure < Rule
+      class RuleStructure < CustomRule
         include Helpers::SourceAccessHelpers
 
-        BASE_RULE_NAME = "Rubydex::Linter::Rule" #: String
+        BASE_RULE_NAME = "Rubydex::Linter::CustomRule" #: String
         RULE_NAMESPACE = "Rubydex::Linter::Rules" #: String
         RULE_FILE_PATTERNS = [
           "rubydex_linter/rules/**/*.rb",
