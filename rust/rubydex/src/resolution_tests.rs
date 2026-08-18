@@ -3984,6 +3984,41 @@ mod todo_tests {
     }
 
     #[test]
+    fn have_linearized_ancestors() {
+        // Todos are namespaces, so they must be the first entry of their own ancestor chain. Member lookups walk that
+        // chain, so an empty one makes every member of the Todo unreachable
+        let mut context = graph_test();
+        context.index_uri("file:///a.rb", {
+            r"
+            class A::B::C
+              def foo; end
+            end
+            "
+        });
+        context.index_uri("file:///d.rb", "class A::B::D < A::B::C; end");
+        context.resolve();
+
+        assert_declaration_kind_eq!(context, "A", "<TODO>");
+        assert_declaration_kind_eq!(context, "A::B", "<TODO>");
+        assert_ancestors_eq!(context, "A", ["A"]);
+        assert_ancestors_eq!(context, "A::B", ["A::B"]);
+
+        // Every member of a Todo is only reachable because the Todo lists itself in its own chain
+        assert_members_eq!(context, "A", ["B"]);
+        assert_members_eq!(context, "A::B", ["C", "D"]);
+
+        // Classes nested in a Todo still inherit from each other. Both the superclass path `A::B::C` and `D`'s own
+        // owner chain go through the Todos
+        assert_ancestors_eq!(
+            context,
+            "A::B::D",
+            ["A::B::D", "A::B::C", "Object", "Kernel", "BasicObject"]
+        );
+        assert_owner_eq!(context, "A::B::D", "A::B");
+        assert_descendants!(context, "A::B::C", ["A::B::D"]);
+    }
+
+    #[test]
     fn promoted_incrementally() {
         // Index class A::B::C first (creates Todos), then provide real definitions.
         // All Todos should be promoted to real namespaces.
