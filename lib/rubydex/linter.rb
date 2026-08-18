@@ -4,7 +4,7 @@ require "rubydex"
 require "rubydex/linter/helpers/path_helpers"
 require "rubydex/linter/helpers/source_access_helpers"
 require "rubydex/linter/result"
-require "rubydex/linter/rule"
+require "rubydex/linter/custom_rule"
 
 Dir.glob(File.expand_path("../rubydex_linter/rules/**/*.rb", __dir__)).each do |rule_file|
   require rule_file

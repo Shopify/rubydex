@@ -44,7 +44,7 @@ module Rubydex
         FileUtils.remove_entry(workspace_path)
       end
 
-      #: -> singleton(Rule)
+      #: -> singleton(CustomRule)
       def rule_class
         @rule_class ||= begin
           name = self.class.to_s.delete_suffix("Test")
@@ -52,8 +52,8 @@ module Rubydex
             raise "Could not infer rule class from #{self.class}; override `#rule_class`"
           end
 
-          Object.const_get(name) #: as singleton(Rule)
-        end #: singleton(Rule)?
+          Object.const_get(name) #: as singleton(CustomRule)
+        end #: singleton(CustomRule)?
       end
 
       # Registers sources that are loaded into the graph for every assertion.
@@ -77,7 +77,7 @@ module Rubydex
 
       # Runs the rule and compares every diagnostic location with the inline
       # annotations in the corresponding source.
-      #: (*(String | Hash[String | Symbol, String])) ?{ (Graph) -> Rule } -> Array[Diagnostic]
+      #: (*(String | Hash[String | Symbol, String])) ?{ (Graph) -> CustomRule } -> Array[Diagnostic]
       def assert_diagnostics(*args, &rule_builder)
         sources = validated_shared_source.merge(normalize_sources(args))
         clean_per_file, expected_per_file = write_sources(sources)
@@ -103,7 +103,7 @@ module Rubydex
 
       # Runs the rule and asserts no diagnostics are reported in the provided
       # sources. Sources must not contain caret annotations.
-      #: (*(String | Hash[String | Symbol, String])) ?{ (Graph) -> Rule } -> Array[Diagnostic]
+      #: (*(String | Hash[String | Symbol, String])) ?{ (Graph) -> CustomRule } -> Array[Diagnostic]
       def assert_no_diagnostics(*args, &rule_builder)
         sources = validated_shared_source.merge(normalize_sources(args))
         write_sources(sources)
@@ -119,7 +119,7 @@ module Rubydex
       #|   String,
       #|   *(String | Hash[String | Symbol, String]),
       #|   ?after_excluding: Array[String],
-      #| ) ?{ (Graph) -> Rule } -> void
+      #| ) ?{ (Graph) -> CustomRule } -> void
       def assert_handles_missing_required_dependency(dependency, *args, after_excluding: [], &rule_builder)
         sources = validated_shared_source.dup #: Hash[String, String]
         after_excluding.each { |filename| sources.delete(filename) }
@@ -226,7 +226,7 @@ module Rubydex
         [clean.join, annotations]
       end
 
-      #: ?{ (Graph) -> Rule } -> Array[Diagnostic]
+      #: ?{ (Graph) -> CustomRule } -> Array[Diagnostic]
       def run_rule(&rule_builder)
         graph = Graph.configure_for_workspace(workspace_path)
         file_paths = workspace_file_paths

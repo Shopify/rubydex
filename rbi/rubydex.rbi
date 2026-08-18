@@ -317,7 +317,7 @@ class Rubydex::Severity::Warning < Rubydex::Severity::Base; end
 class Rubydex::Severity::Information < Rubydex::Severity::Base; end
 class Rubydex::Severity::Hint < Rubydex::Severity::Base; end
 
-class Rubydex::RuleDefinition
+class Rubydex::Rule
   abstract!
 
   class << self
@@ -332,73 +332,73 @@ class Rubydex::RuleDefinition
 end
 
 module Rubydex::Rules
-  ALL = T.let(T.unsafe(nil), T::Array[T.class_of(Rubydex::RuleDefinition)])
+  ALL = T.let(T.unsafe(nil), T::Array[T.class_of(Rubydex::Rule)])
 end
 
-class Rubydex::Rules::ParseError < Rubydex::RuleDefinition
+class Rubydex::Rules::ParseError < Rubydex::Rule
   class << self
     sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
     def default_severity; end
   end
 end
 
-class Rubydex::Rules::ParseWarning < Rubydex::RuleDefinition
+class Rubydex::Rules::ParseWarning < Rubydex::Rule
   class << self
     sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
     def default_severity; end
   end
 end
 
-class Rubydex::Rules::DynamicConstantReference < Rubydex::RuleDefinition
+class Rubydex::Rules::DynamicConstantReference < Rubydex::Rule
   class << self
     sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
     def default_severity; end
   end
 end
 
-class Rubydex::Rules::DynamicSingletonDefinition < Rubydex::RuleDefinition
+class Rubydex::Rules::DynamicSingletonDefinition < Rubydex::Rule
   class << self
     sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
     def default_severity; end
   end
 end
 
-class Rubydex::Rules::DynamicAncestor < Rubydex::RuleDefinition
+class Rubydex::Rules::DynamicAncestor < Rubydex::Rule
   class << self
     sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
     def default_severity; end
   end
 end
 
-class Rubydex::Rules::TopLevelMixinSelf < Rubydex::RuleDefinition
+class Rubydex::Rules::TopLevelMixinSelf < Rubydex::Rule
   class << self
     sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
     def default_severity; end
   end
 end
 
-class Rubydex::Rules::InvalidConstantVisibility < Rubydex::RuleDefinition
+class Rubydex::Rules::InvalidConstantVisibility < Rubydex::Rule
   class << self
     sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
     def default_severity; end
   end
 end
 
-class Rubydex::Rules::InvalidMethodVisibility < Rubydex::RuleDefinition
+class Rubydex::Rules::InvalidMethodVisibility < Rubydex::Rule
   class << self
     sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
     def default_severity; end
   end
 end
 
-class Rubydex::Rules::UndefinedMethodVisibilityTarget < Rubydex::RuleDefinition
+class Rubydex::Rules::UndefinedMethodVisibilityTarget < Rubydex::Rule
   class << self
     sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
     def default_severity; end
   end
 end
 
-class Rubydex::Rules::UndefinedConstantVisibilityTarget < Rubydex::RuleDefinition
+class Rubydex::Rules::UndefinedConstantVisibilityTarget < Rubydex::Rule
   class << self
     sig { override.returns(T.class_of(Rubydex::Severity::Base)) }
     def default_severity; end
@@ -451,7 +451,7 @@ module Rubydex::Linter::Rules; end
 module Rubydex::Linter::Helpers::PathHelpers
   extend T::Helpers
 
-  requires_ancestor { Rubydex::Linter::Rule }
+  requires_ancestor { Rubydex::Linter::CustomRule }
 
   RUBOCOP_EXCLUDE_FNMATCH_FLAGS = T.let(T.unsafe(nil), Integer)
   TEST_PATHS = T.let(T.unsafe(nil), T::Array[String])
@@ -511,7 +511,7 @@ module Rubydex::Linter::Helpers::SourceAccessHelpers
 end
 
 # Base class for semantic lint rules, which collect their diagnostics by walking a resolved graph.
-class Rubydex::Linter::Rule < Rubydex::RuleDefinition
+class Rubydex::Linter::CustomRule < Rubydex::Rule
   abstract!
 
   sig { params(graph: Rubydex::Graph, config: Rubydex::LinterConfig).void }
@@ -578,7 +578,7 @@ class Rubydex::Linter::RuleLoader
   def self.load(workspace_path); end
 end
 
-class Rubydex::Linter::Rules::RuleStructure < Rubydex::Linter::Rule
+class Rubydex::Linter::Rules::RuleStructure < Rubydex::Linter::CustomRule
   include Rubydex::Linter::Helpers::SourceAccessHelpers
 
   BASE_RULE_NAME = T.let(T.unsafe(nil), String)
@@ -608,7 +608,7 @@ class Rubydex::Linter::RuleTestCase < Minitest::Test
   sig { void }
   def teardown; end
 
-  sig { returns(T.class_of(Rubydex::Linter::Rule)) }
+  sig { returns(T.class_of(Rubydex::Linter::CustomRule)) }
   def rule_class; end
 
   sig { params(sources: T::Hash[String, String]).void }
@@ -623,7 +623,7 @@ class Rubydex::Linter::RuleTestCase < Minitest::Test
   sig do
     params(
       args: T.any(String, T::Hash[T.any(String, Symbol), String]),
-      rule_builder: T.nilable(T.proc.params(graph: Rubydex::Graph).returns(Rubydex::Linter::Rule)),
+      rule_builder: T.nilable(T.proc.params(graph: Rubydex::Graph).returns(Rubydex::Linter::CustomRule)),
     ).returns(T::Array[Rubydex::Diagnostic])
   end
   def assert_diagnostics(*args, &rule_builder); end
@@ -631,7 +631,7 @@ class Rubydex::Linter::RuleTestCase < Minitest::Test
   sig do
     params(
       args: T.any(String, T::Hash[T.any(String, Symbol), String]),
-      rule_builder: T.nilable(T.proc.params(graph: Rubydex::Graph).returns(Rubydex::Linter::Rule)),
+      rule_builder: T.nilable(T.proc.params(graph: Rubydex::Graph).returns(Rubydex::Linter::CustomRule)),
     ).returns(T::Array[Rubydex::Diagnostic])
   end
   def assert_no_diagnostics(*args, &rule_builder); end
@@ -641,7 +641,7 @@ class Rubydex::Linter::RuleTestCase < Minitest::Test
       dependency: String,
       args: T.any(String, T::Hash[T.any(String, Symbol), String]),
       after_excluding: T::Array[String],
-      rule_builder: T.nilable(T.proc.params(graph: Rubydex::Graph).returns(Rubydex::Linter::Rule)),
+      rule_builder: T.nilable(T.proc.params(graph: Rubydex::Graph).returns(Rubydex::Linter::CustomRule)),
     ).void
   end
   def assert_handles_missing_required_dependency(dependency, *args, after_excluding: [], &rule_builder); end
@@ -651,17 +651,17 @@ class Rubydex::Linter::Runner
   sig do
     params(
       graph: Rubydex::Graph,
-      rules: T::Array[T.class_of(Rubydex::Linter::Rule)],
+      custom_rules: T::Array[T.class_of(Rubydex::Linter::CustomRule)],
       config: Rubydex::LinterConfig,
     ).void
   end
-  def initialize(graph, rules:, config:); end
+  def initialize(graph, custom_rules:, config:); end
 
   sig { returns(Rubydex::Graph) }
   def graph; end
 
-  sig { returns(T::Array[T.class_of(Rubydex::Linter::Rule)]) }
-  def rules; end
+  sig { returns(T::Array[T.class_of(Rubydex::Linter::CustomRule)]) }
+  def custom_rules; end
 
   sig { returns(Rubydex::Linter::Result) }
   def run; end
@@ -751,13 +751,13 @@ class Rubydex::LinterConfig
   sig { params(rules: T::Hash[String, Rubydex::RuleConfig]).void }
   def initialize(rules); end
 
-  sig { params(rule_class: T.class_of(Rubydex::RuleDefinition)).returns(T::Boolean) }
+  sig { params(rule_class: T.class_of(Rubydex::Rule)).returns(T::Boolean) }
   def rule_enabled?(rule_class); end
 
-  sig { params(rule_class: T.class_of(Rubydex::RuleDefinition)).returns(T::Array[String]) }
+  sig { params(rule_class: T.class_of(Rubydex::Rule)).returns(T::Array[String]) }
   def excludes_for(rule_class); end
 
-  sig { params(rule_class: T.class_of(Rubydex::RuleDefinition)).returns(T.class_of(Rubydex::Severity::Base)) }
+  sig { params(rule_class: T.class_of(Rubydex::Rule)).returns(T.class_of(Rubydex::Severity::Base)) }
   def severity_for(rule_class); end
 end
 

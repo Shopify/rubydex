@@ -8,20 +8,20 @@ module Rubydex
       #: Graph
       attr_reader :graph
 
-      #: Array[singleton(Rule)]
-      attr_reader :rules
+      #: Array[singleton(CustomRule)]
+      attr_reader :custom_rules
 
-      #: (Graph, rules: Array[singleton(Rule)], config: LinterConfig) -> void
-      def initialize(graph, rules:, config:)
+      #: (Graph, custom_rules: Array[singleton(CustomRule)], config: LinterConfig) -> void
+      def initialize(graph, custom_rules:, config:)
         @graph = graph
         @config = config
-        @rules = rules.select { |rule| config.rule_enabled?(rule) }.sort_by(&:rule_name)
+        @custom_rules = custom_rules.select { |rule| config.rule_enabled?(rule) }.sort_by(&:rule_name)
         @dependency_paths = Gem.path #: Array[String]
       end
 
       #: () -> Result
       def run
-        rule_diagnostics = @rules.flat_map do |rule_class|
+        rule_diagnostics = @custom_rules.flat_map do |rule_class|
           rule = rule_class.new(@graph, config: @config)
           rule.lint
           filter_diagnostics(rule.diagnostics, @config.excludes_for(rule_class))

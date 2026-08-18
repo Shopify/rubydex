@@ -11,7 +11,7 @@ module Rubydex
         BASE_RULE_SOURCE = <<~RUBY
           module Rubydex
             module Linter
-              class Rule; end
+              class CustomRule; end
               module Rules; end
             end
           end
@@ -19,7 +19,7 @@ module Rubydex
 
         def setup
           super
-          add_shared_source("lib/rubydex/linter/rule.rb" => BASE_RULE_SOURCE)
+          add_shared_source("lib/rubydex/linter/custom_rule.rb" => BASE_RULE_SOURCE)
         end
 
         def test_allows_one_rule_class_in_each_supported_rule_directory
@@ -46,7 +46,7 @@ module Rubydex
               class Rubydex::Linter::Rules::FirstRule; end
               ^{} Each rule file must define only one linter rule; found 2.
                                             ^^^^^^^^^ `Rubydex::Linter::Rules::FirstRule` is defined here.
-              class Rubydex::Linter::Rules::SecondRule < Rubydex::Linter::Rule; end
+              class Rubydex::Linter::Rules::SecondRule < Rubydex::Linter::CustomRule; end
                                             ^^^^^^^^^^ `Rubydex::Linter::Rules::SecondRule` is defined here.
             RUBY
           )
@@ -57,7 +57,7 @@ module Rubydex
               "`Rubydex::Linter::Rules::FirstRule` is defined here.",
               "`Rubydex::Linter::Rules::SecondRule` is defined here.",
             ],
-            diagnostics.fetch(0).related_information.map(&:message),
+            diagnostics.fetch(0).related_information.map(&:message).sort,
           )
         end
 
@@ -65,7 +65,7 @@ module Rubydex
           assert_diagnostics(
             "rubydex_linter/rules/wrong_namespace.rb" => <<~RUBY,
               module ConsumerRules
-                class WrongNamespace < Rubydex::Linter::Rule; end
+                class WrongNamespace < Rubydex::Linter::CustomRule; end
                       ^^^^^^^^^^^^^^ `ConsumerRules::WrongNamespace` must be defined under `Rubydex::Linter::Rules`.
               end
             RUBY
@@ -75,7 +75,7 @@ module Rubydex
         def test_reports_a_rule_class_outside_a_rule_directory
           assert_diagnostics(
             "app/rules/wrong_place.rb" => <<~RUBY,
-              class Rubydex::Linter::Rules::WrongPlace < Rubydex::Linter::Rule; end
+              class Rubydex::Linter::Rules::WrongPlace < Rubydex::Linter::CustomRule; end
                                             ^^^^^^^^^^ `Rubydex::Linter::Rules::WrongPlace` must be defined under `rubydex_linter/rules/` or `lib/rubydex_linter/rules/`.
             RUBY
           )
@@ -85,7 +85,7 @@ module Rubydex
           assert_no_diagnostics(
             "test/fixtures/fixture_rule.rb" => <<~RUBY,
               module RuleStructureTestFixtures
-                class FixtureRule < Rubydex::Linter::Rule; end
+                class FixtureRule < Rubydex::Linter::CustomRule; end
               end
             RUBY
           )
@@ -95,7 +95,7 @@ module Rubydex
 
         #: (String) -> String
         def rule_source(class_name)
-          "class Rubydex::Linter::Rules::#{class_name} < Rubydex::Linter::Rule; end\n"
+          "class Rubydex::Linter::Rules::#{class_name} < Rubydex::Linter::CustomRule; end\n"
         end
       end
     end

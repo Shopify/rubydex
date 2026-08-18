@@ -8,7 +8,7 @@ require "rubydex/linter"
 class LinterTest < Minitest::Test
   include Test::Helpers::WithContext
 
-  class WarningRule < Rubydex::Linter::Rule
+  class WarningRule < Rubydex::Linter::CustomRule
     class << self
       def default_severity = Rubydex::Severity::Warning
     end
@@ -30,7 +30,7 @@ class LinterTest < Minitest::Test
     end
   end
 
-  class ErrorRule < Rubydex::Linter::Rule
+  class ErrorRule < Rubydex::Linter::CustomRule
     class << self
       def default_severity = Rubydex::Severity::Error
     end
@@ -49,7 +49,7 @@ class LinterTest < Minitest::Test
     end
   end
 
-  class SilentRule < Rubydex::Linter::Rule
+  class SilentRule < Rubydex::Linter::CustomRule
     class << self
       def default_severity = Rubydex::Severity::Hint
     end
@@ -57,7 +57,7 @@ class LinterTest < Minitest::Test
     def lint; end
   end
 
-  class OutsideWorkspaceRule < Rubydex::Linter::Rule
+  class OutsideWorkspaceRule < Rubydex::Linter::CustomRule
     class << self
       def default_severity = Rubydex::Severity::Information
     end
@@ -74,7 +74,7 @@ class LinterTest < Minitest::Test
     end
   end
 
-  class DependencyPathRule < Rubydex::Linter::Rule
+  class DependencyPathRule < Rubydex::Linter::CustomRule
     class << self
       def default_severity = Rubydex::Severity::Information
     end
@@ -91,7 +91,7 @@ class LinterTest < Minitest::Test
     end
   end
 
-  class ExcludedPrimaryRule < Rubydex::Linter::Rule
+  class ExcludedPrimaryRule < Rubydex::Linter::CustomRule
     class << self
       def default_severity = Rubydex::Severity::Information
     end
@@ -131,7 +131,7 @@ class LinterTest < Minitest::Test
   end
 
   def test_runner_builds_diagnostics_with_rule_severity_and_related_information
-    result = Rubydex::Linter::Runner.new(Rubydex::Graph.new, rules: [WarningRule], config: linter_config).run
+    result = Rubydex::Linter::Runner.new(Rubydex::Graph.new, custom_rules: [WarningRule], config: linter_config).run
     diagnostic = result.diagnostics.fetch(0)
 
     assert_equal("WarningRule", diagnostic.rule)
@@ -149,7 +149,7 @@ class LinterTest < Minitest::Test
 
   def test_configured_severity_overrides_the_rule_severity
     config = configured_linter_config("WarningRule", severity: Rubydex::Severity::Error)
-    result = Rubydex::Linter::Runner.new(Rubydex::Graph.new, rules: [WarningRule], config:).run
+    result = Rubydex::Linter::Runner.new(Rubydex::Graph.new, custom_rules: [WarningRule], config:).run
 
     assert_equal(Rubydex::Severity::Error, result.diagnostics.fetch(0).severity)
   end
@@ -158,19 +158,19 @@ class LinterTest < Minitest::Test
     config = linter_config("WarningRule" => false)
     runner = Rubydex::Linter::Runner.new(
       Rubydex::Graph.new,
-      rules: [WarningRule, ErrorRule],
+      custom_rules: [WarningRule, ErrorRule],
       config:,
     )
 
-    assert_equal([ErrorRule], runner.rules)
+    assert_equal([ErrorRule], runner.custom_rules)
     assert_equal(["ErrorRule"], runner.run.diagnostics.map(&:rule))
   end
 
   def test_runner_allows_every_rule_to_be_disabled
     config = linter_config("WarningRule" => false)
-    runner = Rubydex::Linter::Runner.new(Rubydex::Graph.new, rules: [WarningRule], config:)
+    runner = Rubydex::Linter::Runner.new(Rubydex::Graph.new, custom_rules: [WarningRule], config:)
 
-    assert_empty(runner.rules)
+    assert_empty(runner.custom_rules)
     assert_predicate(runner.run, :success?)
   end
 
@@ -194,7 +194,7 @@ class LinterTest < Minitest::Test
     path.prepend("/") if Gem.win_platform?
     graph.index_source(URI::File.build(path: path).to_s, "class Broken", "ruby")
 
-    result = Rubydex::Linter::Runner.new(graph, rules: [SilentRule], config: linter_config).run
+    result = Rubydex::Linter::Runner.new(graph, custom_rules: [SilentRule], config: linter_config).run
 
     assert_equal(["ParseError", "ParseError"], result.diagnostics.map(&:rule))
     assert(result.diagnostics.all? { |diagnostic| diagnostic.severity == Rubydex::Severity::Error })
@@ -202,7 +202,7 @@ class LinterTest < Minitest::Test
   end
 
   def test_runner_accepts_no_rules
-    result = Rubydex::Linter::Runner.new(Rubydex::Graph.new, rules: [], config: linter_config).run
+    result = Rubydex::Linter::Runner.new(Rubydex::Graph.new, custom_rules: [], config: linter_config).run
 
     assert_empty(result.diagnostics)
     assert_predicate(result, :success?)
@@ -214,7 +214,7 @@ class LinterTest < Minitest::Test
       context.write!("workspace-other/file.rb")
       graph = Rubydex::Graph.configure_for_workspace(context.absolute_path_to("workspace"))
 
-      result = Rubydex::Linter::Runner.new(graph, rules: [OutsideWorkspaceRule], config: linter_config).run
+      result = Rubydex::Linter::Runner.new(graph, custom_rules: [OutsideWorkspaceRule], config: linter_config).run
 
       assert_empty(result.diagnostics)
     end
@@ -227,7 +227,7 @@ class LinterTest < Minitest::Test
       dependency_path = context.absolute_path_to("workspace/vendor/bundle")
       Gem.stubs(:path).returns([dependency_path])
 
-      result = Rubydex::Linter::Runner.new(graph, rules: [DependencyPathRule], config: linter_config).run
+      result = Rubydex::Linter::Runner.new(graph, custom_rules: [DependencyPathRule], config: linter_config).run
 
       assert_empty(result.diagnostics)
     end
@@ -241,7 +241,7 @@ class LinterTest < Minitest::Test
       graph.index_source(context.uri_to("workspace/.dev/gem/broken.rb"), "class Broken", "ruby")
       Gem.stubs(:path).returns([dependency_path])
 
-      result = Rubydex::Linter::Runner.new(graph, rules: [SilentRule], config: linter_config).run
+      result = Rubydex::Linter::Runner.new(graph, custom_rules: [SilentRule], config: linter_config).run
 
       assert_empty(result.diagnostics)
     end
@@ -253,7 +253,7 @@ class LinterTest < Minitest::Test
       graph = Rubydex::Graph.configure_for_workspace(context.absolute_path_to("workspace"))
       config = configured_linter_config("ExcludedPrimaryRule", exclude_patterns: ["components/legacy/**"])
 
-      result = Rubydex::Linter::Runner.new(graph, rules: [ExcludedPrimaryRule], config:).run
+      result = Rubydex::Linter::Runner.new(graph, custom_rules: [ExcludedPrimaryRule], config:).run
 
       assert_empty(result.diagnostics)
     end
@@ -268,7 +268,7 @@ class LinterTest < Minitest::Test
         exclude_patterns: ["components/legacy/**"],
       )
 
-      result = Rubydex::Linter::Runner.new(graph, rules: [ExcludedRelatedInformationRule], config:).run
+      result = Rubydex::Linter::Runner.new(graph, custom_rules: [ExcludedRelatedInformationRule], config:).run
 
       assert_equal(["Included primary location."], result.diagnostics.map(&:message))
     end
@@ -283,7 +283,7 @@ class LinterTest < Minitest::Test
       graph = Rubydex::Graph.configure_for_workspace(context.absolute_path_to("workspace"))
       graph.index_all([link])
 
-      result = Rubydex::Linter::Runner.new(graph, rules: [SilentRule], config: linter_config).run
+      result = Rubydex::Linter::Runner.new(graph, custom_rules: [SilentRule], config: linter_config).run
 
       expected_uri = context.uri_to("workspace/link/broken.rb")
       assert_equal([expected_uri, expected_uri], result.diagnostics.map { |diagnostic| diagnostic.location.uri })

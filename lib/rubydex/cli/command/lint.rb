@@ -34,16 +34,15 @@ module Rubydex
           # extension, while linter support is only needed when this command runs.
           require "rubydex/linter"
 
-          rules = load_linter_rules(workspace_path)
-          abort("No Rubydex::Linter::Rule subclasses were loaded") if rules.empty?
+          custom_rules = load_linter_rules(workspace_path)
           config = Rubydex::Config.load(workspace_path)
-          warn_unknown_rules(config.linter, rules)
+          warn_unknown_rules(config.linter, custom_rules)
 
           graph = build_graph($stderr, workspace_path:, config:)
-          runner = Rubydex::Linter::Runner.new(graph, rules:, config: config.linter)
-          rule_count = runner.rules.size
-          $stderr.puts("Running #{rule_count} #{pluralize("rule", rule_count)}...")
+          runner = Rubydex::Linter::Runner.new(graph, custom_rules:, config: config.linter)
+          $stderr.puts("Linting...")
           result = runner.run
+
           if result.diagnostics.empty?
             print_summary(graph.documents.count, result.diagnostics)
             return
@@ -55,9 +54,9 @@ module Rubydex
 
         private
 
-        #: (Rubydex::LinterConfig config, Array[singleton(Rubydex::Linter::Rule)] known_rule_classes) -> void
-        def warn_unknown_rules(config, known_rule_classes)
-          known_rule_names = (Rubydex::Rules::ALL + known_rule_classes).map(&:rule_name).uniq.sort
+        #: (Rubydex::LinterConfig config, Array[singleton(Rubydex::Linter::CustomRule)] custom_rule_classes) -> void
+        def warn_unknown_rules(config, custom_rule_classes)
+          known_rule_names = (Rubydex::Rules::ALL + custom_rule_classes).map(&:rule_name).uniq.sort
           unknown_rule_names = config.rules.keys.reject { |name| known_rule_names.include?(name) }.sort
           return if unknown_rule_names.empty?
 
@@ -68,10 +67,10 @@ module Rubydex
           )
         end
 
-        #: (String workspace_path) -> Array[singleton(Rubydex::Linter::Rule)]
+        #: (String workspace_path) -> Array[singleton(Rubydex::Linter::CustomRule)]
         def load_linter_rules(workspace_path)
           Rubydex::Linter::RuleLoader.load(workspace_path)
-          Rubydex::Linter::Rule.subclasses
+          Rubydex::Linter::CustomRule.subclasses
         rescue Rubydex::Linter::RuleLoadError => error
           abort(error.message)
         end
