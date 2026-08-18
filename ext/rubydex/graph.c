@@ -633,9 +633,9 @@ static VALUE rdxr_graph_diagnostics(VALUE self) {
     for (size_t i = 0; i < array->len; i++) {
         DiagnosticEntry entry = array->items[i];
         VALUE message = entry.message == NULL ? Qnil : rb_utf8_str_new_cstr(entry.message);
-        VALUE rule = rb_utf8_str_new_cstr(entry.rule);
+        VALUE rule = rdxi_rule_class_from_name(entry.rule.name, entry.rule.name_length);
         VALUE location = rdxi_build_location_value(entry.location);
-        VALUE severity = rdxi_build_diagnostic_severity_value(mRubydex, entry.severity);
+        VALUE severity = rdxi_build_diagnostic_severity_value(mRubydex, entry.rule.default_severity);
 
         VALUE kwargs = rb_hash_new();
         rb_hash_aset(kwargs, ID2SYM(rb_intern("rule")), rule);

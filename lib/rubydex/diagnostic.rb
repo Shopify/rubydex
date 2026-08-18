@@ -2,7 +2,7 @@
 
 module Rubydex
   class Diagnostic
-    #: String
+    #: singleton(Rule)
     attr_reader :rule
 
     #: String
@@ -18,7 +18,7 @@ module Rubydex
     attr_reader :related_information
 
     #: (
-    #|   rule: String,
+    #|   rule: singleton(Rule),
     #|   message: String,
     #|   location: Location,
     #|   severity: singleton(Severity::Base),

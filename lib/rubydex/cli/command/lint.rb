@@ -101,7 +101,7 @@ module Rubydex
         #: (Diagnostic diagnostic, workspace_path: String) -> String
         def format_linter_diagnostic(diagnostic, workspace_path:)
           content = +"#{format_linter_location(diagnostic.location, workspace_path:)}: " \
-            "#{diagnostic.severity.value}: #{diagnostic.rule}: #{diagnostic.message}"
+            "#{diagnostic.severity.value}: #{diagnostic.rule.rule_name}: #{diagnostic.message}"
 
           diagnostic.related_information.each do |information|
             content << "\n  #{format_linter_location(information.location, workspace_path:)}: #{information.message}"

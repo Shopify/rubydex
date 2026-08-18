@@ -89,14 +89,14 @@ class GraphTest < Minitest::Test
       assert_diagnostics(
         [
           {
-            rule: "ParseError",
+            rule: Rubydex::Rules::ParseError,
             path: "file.rb",
             message: "expected an `end` to close the `class` statement",
             severity: Rubydex::Severity::Error,
             related_information: [],
           },
           {
-            rule: "ParseError",
+            rule: Rubydex::Rules::ParseError,
             path: "file.rb",
             message: "unexpected end-of-input, assuming it is closing the parent top level context",
             severity: Rubydex::Severity::Error,

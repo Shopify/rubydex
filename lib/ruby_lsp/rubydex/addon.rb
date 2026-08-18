@@ -177,7 +177,7 @@ module Rubydex
           ::RubyLsp::Interface::Diagnostic.new(
             message: diagnostic.message,
             source: "Rubydex",
-            code: diagnostic.rule,
+            code: diagnostic.rule.rule_name,
             severity: DIAGNOSTIC_SEVERITIES.fetch(diagnostic.severity),
             range: lsp_range(location),
             related_information: diagnostic.related_information.map do |information|

@@ -134,7 +134,7 @@ class LinterTest < Minitest::Test
     result = Rubydex::Linter::Runner.new(Rubydex::Graph.new, custom_rules: [WarningRule], config: linter_config).run
     diagnostic = result.diagnostics.fetch(0)
 
-    assert_equal("WarningRule", diagnostic.rule)
+    assert_equal(WarningRule, diagnostic.rule)
     assert_equal("A warning.", diagnostic.message)
     assert_equal(Rubydex::Severity::Warning, diagnostic.severity)
     assert_equal(["Related context."], diagnostic.related_information.map(&:message))
@@ -163,7 +163,7 @@ class LinterTest < Minitest::Test
     )
 
     assert_equal([ErrorRule], runner.custom_rules)
-    assert_equal(["ErrorRule"], runner.run.diagnostics.map(&:rule))
+    assert_equal([ErrorRule], runner.run.diagnostics.map(&:rule))
   end
 
   def test_runner_allows_every_rule_to_be_disabled
@@ -196,7 +196,7 @@ class LinterTest < Minitest::Test
 
     result = Rubydex::Linter::Runner.new(graph, custom_rules: [SilentRule], config: linter_config).run
 
-    assert_equal(["ParseError", "ParseError"], result.diagnostics.map(&:rule))
+    assert_equal([Rubydex::Rules::ParseError, Rubydex::Rules::ParseError], result.diagnostics.map(&:rule))
     assert(result.diagnostics.all? { |diagnostic| diagnostic.severity == Rubydex::Severity::Error })
     refute_predicate(result, :success?)
   end
@@ -314,7 +314,7 @@ class LinterTest < Minitest::Test
   #: (singleton(Rubydex::Severity::Base) severity) -> Rubydex::Diagnostic
   def diagnostic(severity)
     Rubydex::Diagnostic.new(
-      rule: "TestRule",
+      rule: SilentRule,
       message: "Test diagnostic.",
       location: Rubydex::Location.new(
         uri: "untitled:test",
