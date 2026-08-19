@@ -38,7 +38,7 @@ module Rubydex
             location.start_column,
             location.end_line,
             location.end_column,
-            diagnostic.rule,
+            diagnostic.rule.rule_name,
             diagnostic.message,
           ]
         end

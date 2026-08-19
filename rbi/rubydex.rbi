@@ -419,7 +419,7 @@ end
 class Rubydex::Diagnostic
   sig do
     params(
-      rule: String,
+      rule: T.class_of(Rubydex::Rule),
       message: String,
       location: Rubydex::Location,
       severity: T.class_of(Rubydex::Severity::Base),
@@ -434,7 +434,7 @@ class Rubydex::Diagnostic
   sig { returns(String) }
   def message; end
 
-  sig { returns(String) }
+  sig { returns(T.class_of(Rubydex::Rule)) }
   def rule; end
 
   sig { returns(T.class_of(Rubydex::Severity::Base)) }

@@ -3,6 +3,12 @@
 require "test_helper"
 
 class DiagnosticTest < Minitest::Test
+  class ExampleRule < Rubydex::Rule
+    class << self
+      def default_severity = Rubydex::Severity::Warning
+    end
+  end
+
   def test_severity_from_value
     {
       error: Rubydex::Severity::Error,
@@ -27,7 +33,7 @@ class DiagnosticTest < Minitest::Test
 
   def test_diagnostic_requires_severity
     error = assert_raises(ArgumentError) do
-      Rubydex::Diagnostic.new(rule: "Example", message: "Example", location: location)
+      Rubydex::Diagnostic.new(rule: ExampleRule, message: "Example", location: location)
     end
 
     assert_match(/missing keyword: :severity/, error.message)
@@ -36,14 +42,14 @@ class DiagnosticTest < Minitest::Test
   def test_diagnostic_exposes_severity_and_related_information
     related = Rubydex::RelatedInformation.new("Also defined here", location(uri: "file:///related.rb"))
     diagnostic = Rubydex::Diagnostic.new(
-      rule: "Example",
+      rule: ExampleRule,
       message: "Example",
       location: location,
       severity: Rubydex::Severity::Warning,
       related_information: [related],
     )
 
-    assert_equal("Example", diagnostic.rule)
+    assert_equal(ExampleRule, diagnostic.rule)
     assert_equal("Example", diagnostic.message)
     assert_equal(location, diagnostic.location)
     assert_same(Rubydex::Severity::Warning, diagnostic.severity)
@@ -52,7 +58,7 @@ class DiagnosticTest < Minitest::Test
 
   def test_diagnostic_defaults_to_no_related_information
     diagnostic = Rubydex::Diagnostic.new(
-      rule: "Example",
+      rule: ExampleRule,
       message: "Example",
       location: location,
       severity: Rubydex::Severity::Information,

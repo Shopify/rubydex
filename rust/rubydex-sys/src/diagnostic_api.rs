@@ -83,10 +83,9 @@ pub unsafe extern "C" fn rdx_rules_free(rules: CRuleArray) {
 /// C-compatible struct representing a diagnostic entry.
 #[repr(C)]
 pub struct DiagnosticEntry {
-    pub rule: *const c_char,
+    pub rule: CRule,
     pub message: *const c_char,
     pub location: *mut Location,
-    pub severity: DiagnosticSeverity,
 }
 
 /// C-compatible array wrapper for diagnostics.
@@ -126,13 +125,9 @@ pub unsafe extern "C" fn rdx_graph_diagnostics(pointer: GraphPointer) -> *mut Di
                 let location = create_location_for_uri_and_offset(graph, document, diagnostic.offset());
 
                 DiagnosticEntry {
-                    rule: CString::new(diagnostic.rule().to_string())
-                        .unwrap()
-                        .into_raw()
-                        .cast_const(),
+                    rule: CRule::from(*diagnostic.rule()),
                     message: CString::new(diagnostic.message()).unwrap().into_raw().cast_const(),
                     location,
-                    severity: DiagnosticSeverity::from(diagnostic.rule().default_severity()),
                 }
             })
             .collect::<Vec<DiagnosticEntry>>();
@@ -159,9 +154,6 @@ pub unsafe extern "C" fn rdx_diagnostics_free(ptr: *mut DiagnosticArray) {
         let mut boxed_slice: Box<[DiagnosticEntry]> = unsafe { Box::from_raw(slice_ptr) };
 
         for entry in &mut *boxed_slice {
-            if !entry.rule.is_null() {
-                let _ = unsafe { CString::from_raw(entry.rule.cast_mut()) };
-            }
             if !entry.message.is_null() {
                 let _ = unsafe { CString::from_raw(entry.message.cast_mut()) };
             }

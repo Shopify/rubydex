@@ -7,6 +7,7 @@
  */
 
 static VALUE mRubydex;
+static VALUE mRules;
 VALUE cDiagnostic;
 static VALUE cRule;
 static ID id_default_severity;
@@ -50,7 +51,7 @@ static VALUE rdxr_generated_rule_default_severity(VALUE self) {
 
 // Generates a rule class for every rule the graph can report. Severities are resolved here rather than when they are
 // read, which is why Rubydex::Severity is loaded before this extension (see `lib/rubydex.rb`).
-static void define_generated_rules(VALUE mRules) {
+static void define_generated_rules(void) {
     CRuleArray rule_array = rdx_rules();
     VALUE rules = rb_ary_new_capa((long)rule_array.len);
 
@@ -69,11 +70,16 @@ static void define_generated_rules(VALUE mRules) {
     rb_define_const(mRules, "ALL", rb_obj_freeze(rules));
 }
 
+VALUE rdxi_rule_class_from_name(const char *name, size_t length) {
+    return rb_const_get_at(mRules, rb_intern2(name, (long)length));
+}
+
 void rdxi_initialize_diagnostic(VALUE moduleRubydex) {
     mRubydex = moduleRubydex;
     id_default_severity = rb_intern("@default_severity");
 
     cDiagnostic = rb_define_class_under(mRubydex, "Diagnostic", rb_cObject);
     cRule = rb_define_class_under(mRubydex, "Rule", rb_cObject);
-    define_generated_rules(rb_define_module_under(mRubydex, "Rules"));
+    mRules = rb_define_module_under(mRubydex, "Rules");
+    define_generated_rules();
 }

@@ -81,7 +81,7 @@ module Rubydex
       #| ) -> void
       def add_diagnostic(message, location, related_information: [])
         @diagnostics << Diagnostic.new(
-          rule: self.class.rule_name,
+          rule: self.class,
           message: message,
           location: location,
           severity: verified_severity,
