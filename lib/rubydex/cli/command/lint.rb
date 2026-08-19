@@ -90,7 +90,24 @@ module Rubydex
           puts("Offenses:")
           puts
 
-          grouped_diagnostics.each do |severity, diagnostics|
+          Rubydex::Severity::ALL.each do |severity|
+            diagnostics = grouped_diagnostics[severity]
+            next unless diagnostics
+
+            diagnostics.sort_by! do |diagnostic|
+              location = diagnostic.location
+
+              [
+                location.uri,
+                location.start_line,
+                location.start_column,
+                location.end_line,
+                location.end_column,
+                diagnostic.rule.rule_name,
+                diagnostic.message,
+              ]
+            end
+
             diagnostics.each do |diagnostic|
               puts(format_linter_diagnostic(severity, diagnostic, workspace_path: graph.workspace_path))
               print_source_excerpt(diagnostic.location)

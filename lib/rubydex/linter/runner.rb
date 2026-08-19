@@ -30,17 +30,6 @@ module Rubydex
         graph_diagnostics = filter_diagnostics(@graph.diagnostics, [])
         (graph_diagnostics + rule_diagnostics).select do |diagnostic|
           diagnostic_in_workspace?(diagnostic)
-        end.sort_by do |diagnostic|
-          location = diagnostic.location
-          [
-            location.uri,
-            location.start_line,
-            location.start_column,
-            location.end_line,
-            location.end_column,
-            diagnostic.rule.rule_name,
-            diagnostic.message,
-          ]
         end
       end
 

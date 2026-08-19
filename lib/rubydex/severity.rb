@@ -53,12 +53,9 @@ module Rubydex
       end
     end
 
-    VALUE_MAP = {
-      Error.value => Error,
-      Warning.value => Warning,
-      Information.value => Information,
-      Hint.value => Hint,
-    }.freeze #: Hash[Symbol, singleton(Base)]
+    # All severities order based on their importance.
+    ALL = [Error, Warning, Information, Hint].freeze #: Array[singleton(Base)]
+    VALUE_MAP = ALL.to_h { |severity| [severity.value, severity] }.freeze #: Hash[Symbol, singleton(Base)]
 
     class << self
       #: (Symbol) -> singleton(Base)

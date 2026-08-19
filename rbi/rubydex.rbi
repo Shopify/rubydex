@@ -301,6 +301,9 @@ class Rubydex::Prepend < Rubydex::Mixin; end
 class Rubydex::Extend < Rubydex::Mixin; end
 
 module Rubydex::Severity
+  # Every severity, ordered from the most to the least severe.
+  ALL = T.let(T.unsafe(nil), T::Array[T.class_of(Rubydex::Severity::Base)])
+
   sig { params(value: Symbol).returns(T.class_of(Rubydex::Severity::Base)) }
   def self.from_value(value); end
 end
