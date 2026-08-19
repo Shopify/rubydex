@@ -6,6 +6,7 @@ use std::ptr;
 use crate::declaration_api::CDeclaration;
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
+use crate::name_api::raw_name_for_name_id;
 use libc::c_char;
 use rubydex::model::graph::Graph;
 use rubydex::model::ids::{ConstantReferenceId, MethodReferenceId};
@@ -145,6 +146,31 @@ pub unsafe extern "C" fn rdx_constant_reference_name(pointer: GraphPointer, refe
             .expect("String ID should exist")
             .to_string();
         CString::new(name_string).unwrap().into_raw().cast_const()
+    })
+}
+
+/// Returns the constant path as it appeared in source for a constant reference id, or NULL if the reference cannot be
+/// found. Caller must free with `free_c_string`.
+///
+/// # Safety
+///
+/// Assumes pointer is valid.
+///
+/// # Panics
+///
+/// This function will panic if the reference's name cannot be reconstructed or contains an interior null byte.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_constant_reference_raw_name(pointer: GraphPointer, reference_id: u64) -> *const c_char {
+    with_graph(pointer, |graph| {
+        let ref_id = ConstantReferenceId::new(reference_id);
+        let Some(reference) = graph.constant_references().get(&ref_id) else {
+            return ptr::null();
+        };
+
+        CString::new(raw_name_for_name_id(graph, *reference.name_id()))
+            .unwrap()
+            .into_raw()
+            .cast_const()
     })
 }
 

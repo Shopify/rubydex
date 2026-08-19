@@ -17,6 +17,9 @@ end
 class Rubydex::ConstantReference < Rubydex::Reference
   abstract!
 
+  sig { returns(String) }
+  def raw_name; end
+
   sig { returns(Rubydex::Location) }
   def location; end
 
