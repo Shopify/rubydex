@@ -387,6 +387,37 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_graph_resolve_constant_with_definition_lexical_nesting
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        class Bar
+          class Baz; end
+        end
+
+        class Foo
+          class Baz; end
+
+          class ::Bar
+            def target; end
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      definitions = graph.documents.find { |document| document.uri == context.uri_to("foo.rb") }.definitions
+      target_definition = definitions.find do |definition|
+        definition.is_a?(Rubydex::MethodDefinition) && definition.name == "target()"
+      end
+
+      declaration = graph.resolve_constant("Baz", target_definition.lexical_nesting)
+
+      assert_equal("Bar::Baz", declaration.name)
+    end
+  end
+
   def test_graph_resolve_with_invalid_argument
     graph = Rubydex::Graph.new
 

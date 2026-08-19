@@ -33,6 +33,13 @@ class Rubydex::ConstantReference < Rubydex::Reference
   end
 end
 
+module Rubydex::ConstantHelper
+  interface!
+
+  sig { abstract.returns(Rubydex::ConstantReference) }
+  def constant_path; end
+end
+
 class Rubydex::UnresolvedConstantReference < Rubydex::ConstantReference
   sig { returns(String) }
   def name; end
@@ -178,8 +185,15 @@ class Rubydex::AttrAccessorDefinition < Rubydex::Definition; end
 class Rubydex::AttrReaderDefinition < Rubydex::Definition; end
 class Rubydex::AttrWriterDefinition < Rubydex::Definition; end
 class Rubydex::ClassVariableDefinition < Rubydex::Definition; end
-class Rubydex::ConstantAliasDefinition < Rubydex::Definition; end
-class Rubydex::ConstantDefinition < Rubydex::Definition; end
+
+class Rubydex::ConstantAliasDefinition < Rubydex::Definition
+  include Rubydex::ConstantHelper
+end
+
+class Rubydex::ConstantDefinition < Rubydex::Definition
+  include Rubydex::ConstantHelper
+end
+
 class Rubydex::GlobalVariableAliasDefinition < Rubydex::Definition; end
 class Rubydex::GlobalVariableDefinition < Rubydex::Definition; end
 class Rubydex::InstanceVariableDefinition < Rubydex::Definition; end
@@ -272,6 +286,8 @@ class Rubydex::Signature::ForwardParameter < Rubydex::Signature::Parameter; end
 class Rubydex::Signature::BlockParameter < Rubydex::Signature::Parameter; end
 
 class Rubydex::ModuleDefinition < Rubydex::Definition
+  include Rubydex::ConstantHelper
+
   sig { returns(T::Array[Rubydex::Mixin]) }
   def mixins; end
 end
@@ -282,6 +298,8 @@ class Rubydex::SingletonClassDefinition < Rubydex::Definition
 end
 
 class Rubydex::ClassDefinition < Rubydex::Definition
+  include Rubydex::ConstantHelper
+
   sig { returns(T.nilable(Rubydex::ConstantReference)) }
   def superclass; end
 
@@ -906,7 +924,12 @@ class Rubydex::Graph
   sig { returns(T.self_type) }
   def resolve; end
 
-  sig { params(name: String, nesting: T::Array[String]).returns(T.nilable(Rubydex::Declaration)) }
+  sig do
+    params(
+      name: String,
+      nesting: T.any(T::Array[String], T::Array[Rubydex::ConstantHelper]),
+    ).returns(T.nilable(Rubydex::Declaration))
+  end
   def resolve_constant(name, nesting); end
 
   sig { params(require_path: String, load_paths: T::Array[String]).returns(T.nilable(Rubydex::Document)) }

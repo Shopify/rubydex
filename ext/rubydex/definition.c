@@ -19,6 +19,8 @@ static VALUE cInclude;
 static VALUE cPrepend;
 static VALUE cExtend;
 static VALUE cDocument;
+static VALUE cDefinitionConstantReference;
+static VALUE mConstantHelper;
 VALUE cComment;
 VALUE cDefinition;
 VALUE cClassDefinition;
@@ -151,6 +153,59 @@ static VALUE rdxr_definition_name(VALUE self) {
 
     const char *name = rdx_definition_name(graph, data->id);
     return rdxi_owned_c_string_to_ruby(name);
+}
+
+/*
+ * call-seq:
+ *   constant_path -> Rubydex::ConstantReference
+ *
+ * Returns the constant path used to name this definition.
+ */
+static VALUE rdxr_definition_constant_path(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    VALUE argv[] = {data->graph_obj, ULL2NUM(data->id)};
+    return rb_class_new_instance(2, argv, cDefinitionConstantReference);
+}
+
+static VALUE rdxr_definition_constant_path_raw_name(VALUE self) {
+    HandleData *data;
+    void *graph = rdxi_graph_from_handle(self, &data);
+
+    const char *name = rdx_definition_constant_path_raw_name(graph, data->id);
+    if (name == NULL) {
+        rb_raise(rb_eRuntimeError, "Definition must have a constant path");
+    }
+    return rdxi_owned_c_string_to_ruby(name);
+}
+
+static VALUE rdxr_definition_constant_path_location(VALUE self) {
+    HandleData *data;
+    void *graph = rdxi_graph_from_handle(self, &data);
+
+    Location *loc = rdx_definition_constant_path_location(graph, data->id);
+    if (loc == NULL) {
+        rb_raise(rb_eRuntimeError, "Definition must have a constant path");
+    }
+    VALUE location = rdxi_build_location_value(loc);
+    rdx_location_free(loc);
+    return location;
+}
+
+static VALUE rdxr_definition_constant_path_document(VALUE self) {
+    HandleData *data;
+    void *graph = rdxi_graph_from_handle(self, &data);
+
+    const uint64_t *uri_id = rdx_definition_document(graph, data->id);
+    if (uri_id == NULL) {
+        rb_raise(rb_eRuntimeError, "Definition not found");
+    }
+
+    VALUE argv[] = {data->graph_obj, ULL2NUM(*uri_id)};
+    free_u64(uri_id);
+
+    return rb_class_new_instance(2, argv, cDocument);
 }
 
 /*
@@ -424,6 +479,9 @@ void rdxi_initialize_definition(VALUE mod) {
     cPrepend = rb_const_get(mRubydex, rb_intern("Prepend"));
     cExtend = rb_const_get(mRubydex, rb_intern("Extend"));
     cDocument = rb_const_get(mRubydex, rb_intern("Document"));
+    mConstantHelper = rb_const_get(mRubydex, rb_intern("ConstantHelper"));
+
+    rb_define_method(mConstantHelper, "constant_path", rdxr_definition_constant_path, 0);
 
     cComment = rb_define_class_under(mRubydex, "Comment", rb_cObject);
 
@@ -442,6 +500,7 @@ void rdxi_initialize_definition(VALUE mod) {
     rb_define_method(cDefinition, "document", rdxr_definition_document, 0);
 
     cClassDefinition = rb_define_class_under(mRubydex, "ClassDefinition", cDefinition);
+    rb_include_module(cClassDefinition, mConstantHelper);
     rb_define_method(cClassDefinition, "superclass", rdxr_class_definition_superclass, 0);
     rb_define_method(cClassDefinition, "mixins", rdxr_definition_mixins, 0);
 
@@ -449,10 +508,13 @@ void rdxi_initialize_definition(VALUE mod) {
     rb_define_method(cSingletonClassDefinition, "mixins", rdxr_definition_mixins, 0);
 
     cModuleDefinition = rb_define_class_under(mRubydex, "ModuleDefinition", cDefinition);
+    rb_include_module(cModuleDefinition, mConstantHelper);
     rb_define_method(cModuleDefinition, "mixins", rdxr_definition_mixins, 0);
 
     cConstantDefinition = rb_define_class_under(mRubydex, "ConstantDefinition", cDefinition);
+    rb_include_module(cConstantDefinition, mConstantHelper);
     cConstantAliasDefinition = rb_define_class_under(mRubydex, "ConstantAliasDefinition", cDefinition);
+    rb_include_module(cConstantAliasDefinition, mConstantHelper);
     cConstantVisibilityDefinition = rb_define_class_under(mRubydex, "ConstantVisibilityDefinition", cDefinition);
     cMethodVisibilityDefinition = rb_define_class_under(mRubydex, "MethodVisibilityDefinition", cDefinition);
     cMethodDefinition = rb_define_class_under(mRubydex, "MethodDefinition", cDefinition);
@@ -467,4 +529,20 @@ void rdxi_initialize_definition(VALUE mod) {
     rb_define_method(cMethodAliasDefinition, "signatures", rdxr_method_alias_definition_signatures, 0);
     rb_define_method(cMethodAliasDefinition, "target", rdxr_method_alias_definition_target, 0);
     cGlobalVariableAliasDefinition = rb_define_class_under(mRubydex, "GlobalVariableAliasDefinition", cDefinition);
+}
+
+void rdxi_initialize_definition_constant_reference(VALUE mod) {
+    cDefinitionConstantReference = rb_define_class_under(mod, "DefinitionConstantReference", cConstantReference);
+    rb_define_alloc_func(cDefinitionConstantReference, rdxr_handle_alloc);
+    rb_define_method(cDefinitionConstantReference, "initialize", rdxr_handle_initialize, 2);
+    rb_define_method(cDefinitionConstantReference, "raw_name", rdxr_definition_constant_path_raw_name, 0);
+    rb_define_method(cDefinitionConstantReference, "location", rdxr_definition_constant_path_location, 0);
+    rb_define_method(cDefinitionConstantReference, "document", rdxr_definition_constant_path_document, 0);
+    rb_funcall(
+        rb_singleton_class(cDefinitionConstantReference),
+        rb_intern("private"),
+        1,
+        ID2SYM(rb_intern("new"))
+    );
+    rb_funcall(mod, rb_intern("private_constant"), 1, ID2SYM(rb_intern("DefinitionConstantReference")));
 }

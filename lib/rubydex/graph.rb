@@ -25,6 +25,20 @@ module Rubydex
       index_all(workspace_paths)
     end
 
+    alias_method :resolve_constant_with_names, :resolve_constant
+    private :resolve_constant_with_names
+
+    # Resolves a constant from either an explicit outer-to-inner name stack or a lexical nesting returned by a
+    # definition.
+    #: (String, Array[String] | Array[ConstantHelper]) -> Declaration?
+    def resolve_constant(name, nesting)
+      if nesting.is_a?(Array) && nesting.all? { |frame| frame.is_a?(ConstantHelper) }
+        nesting = nesting.reverse.map { |frame| frame.constant_path.raw_name }
+      end
+
+      resolve_constant_with_names(name, nesting)
+    end
+
     # Returns all workspace paths that should be indexed
     #
     #: -> Array[String]

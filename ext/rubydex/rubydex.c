@@ -29,5 +29,6 @@ void Init_rubydex(void) {
     rdxi_initialize_location(mRubydex);
     rdxi_initialize_diagnostic(mRubydex);
     rdxi_initialize_reference(mRubydex);
+    rdxi_initialize_definition_constant_reference(mRubydex);
     rdxi_initialize_signature(mRubydex);
 }
