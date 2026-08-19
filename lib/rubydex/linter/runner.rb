@@ -16,60 +16,40 @@ module Rubydex
         @graph = graph
         @config = config
         @custom_rules = custom_rules.select { |rule| config.rule_enabled?(rule) }.sort_by(&:rule_name)
-        @dependency_paths = Gem.path #: Array[String]
+        @dependency_patterns = Gem.path.map { |path| "#{path}/**/*" } #: Array[String]
       end
 
       #: () -> Array[Diagnostic]
       def run
-        rule_diagnostics = @custom_rules.flat_map do |rule_class|
+        diagnostics = @graph.diagnostics
+
+        @custom_rules.each do |rule_class|
           rule = rule_class.new(@graph, config: @config)
           rule.lint
-          filter_diagnostics(rule.diagnostics, @config.excludes_for(rule_class))
+          diagnostics.concat(rule.diagnostics)
         end
 
-        graph_diagnostics = filter_diagnostics(@graph.diagnostics, [])
-        (graph_diagnostics + rule_diagnostics).select do |diagnostic|
-          diagnostic_in_workspace?(diagnostic)
-        end
-      end
+        # Make sure we have the forward/back slash at the end to avoid accidentally matching sibling directories that
+        # share a prefix.
+        workspace_path = File.join(@graph.workspace_path, "")
 
-      private
+        # Filter out diagnostics that are excluded, inside dependencies or otherwise not a part of the workspace.
+        diagnostics.select! do |diagnostic|
+          rule = diagnostic.rule
+          next false unless @config.rule_enabled?(rule)
 
-      #: (Array[Diagnostic], Array[String]) -> Array[Diagnostic]
-      def filter_diagnostics(diagnostics, exclude_patterns)
-        diagnostics.reject do |diagnostic|
-          location_excluded?(diagnostic.location, exclude_patterns)
-        end
-      end
+          excluded_patterns = @config.excludes_for(rule).map { |pattern| "#{workspace_path}#{pattern}" }
+          excluded_patterns.concat(@dependency_patterns)
 
-      #: (Location, Array[String]) -> bool
-      def location_excluded?(location, patterns)
-        path = location.to_file_path
-        return true if @dependency_paths.any? do |dependency_path|
-          path == dependency_path || path.start_with?("#{dependency_path}/")
+          path = diagnostic.location.to_file_path
+
+          path.start_with?(workspace_path) &&
+            excluded_patterns.none? { |p| File.fnmatch?(p, path, Helpers::PathHelpers::EXCLUDE_FNMATCH_FLAGS) }
+        rescue Location::NotFileUriError
+          true
         end
 
-        Helpers::PathHelpers.path_matches_patterns?(
-          path,
-          patterns,
-          workspace: @graph.workspace_path,
-          flags: Helpers::PathHelpers::RUBOCOP_EXCLUDE_FNMATCH_FLAGS,
-        )
-      rescue Location::NotFileUriError
-        false
-      end
-
-      #: (Diagnostic) -> bool
-      def diagnostic_in_workspace?(diagnostic)
-        path = diagnostic.location.to_file_path
-        workspace_path = Pathname.new(File.expand_path(@graph.workspace_path))
-        relative_path = Pathname.new(File.expand_path(path)).relative_path_from(workspace_path)
-
-        relative_path.each_filename.first != ".."
-      rescue Location::NotFileUriError
-        true
-      rescue ArgumentError
-        false
+        diagnostics
       end
     end
   end

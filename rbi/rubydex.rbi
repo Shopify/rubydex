@@ -455,7 +455,7 @@ module Rubydex::Linter::Helpers::PathHelpers
 
   requires_ancestor { Rubydex::Linter::CustomRule }
 
-  RUBOCOP_EXCLUDE_FNMATCH_FLAGS = T.let(T.unsafe(nil), Integer)
+  EXCLUDE_FNMATCH_FLAGS = T.let(T.unsafe(nil), Integer)
   TEST_PATHS = T.let(T.unsafe(nil), T::Array[String])
 
   sig do

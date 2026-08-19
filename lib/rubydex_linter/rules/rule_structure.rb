@@ -116,7 +116,7 @@ module Rubydex
             path,
             patterns,
             workspace: graph.workspace_path,
-            flags: Helpers::PathHelpers::RUBOCOP_EXCLUDE_FNMATCH_FLAGS,
+            flags: Helpers::PathHelpers::EXCLUDE_FNMATCH_FLAGS,
           )
         end
       end
