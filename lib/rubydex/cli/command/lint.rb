@@ -35,29 +35,39 @@ module Rubydex
           require "rubydex/linter"
 
           custom_rules = load_linter_rules(workspace_path)
-          config = Rubydex::Config.load(workspace_path)
-          warn_unknown_rules(config.linter, custom_rules)
+          warn_unknown_rules(custom_rules)
 
           graph = build_graph($stderr, workspace_path:, config:)
-          runner = Rubydex::Linter::Runner.new(graph, custom_rules:, config: config.linter)
+          runner = Rubydex::Linter::Runner.new(graph, custom_rules:, config: linter_config)
           $stderr.puts("Linting...")
-          result = runner.run
+          diagnostics = runner.run
+          by_severity = diagnostics.group_by { |diagnostic| diagnostic.rule.severity(linter_config) }
 
-          if result.diagnostics.empty?
-            print_summary(graph.documents.count, result.diagnostics)
+          if diagnostics.empty?
+            print_summary(graph.documents.count, by_severity)
             return
           end
 
-          print_offenses(result.diagnostics, graph)
-          exit(1) unless result.success?
+          print_offenses(by_severity, graph)
+          exit(1) if by_severity[Rubydex::Severity::Error]&.any?
         end
 
         private
 
-        #: (Rubydex::LinterConfig config, Array[singleton(Rubydex::Linter::CustomRule)] custom_rule_classes) -> void
-        def warn_unknown_rules(config, custom_rule_classes)
+        #: -> Rubydex::Config
+        def config
+          @config ||= Rubydex::Config.load(current_workspace_path) #: Rubydex::Config?
+        end
+
+        #: -> Rubydex::LinterConfig
+        def linter_config
+          @linter_config ||= config.linter #: Rubydex::LinterConfig?
+        end
+
+        #: (Array[singleton(Rubydex::Linter::CustomRule)] custom_rule_classes) -> void
+        def warn_unknown_rules(custom_rule_classes)
           known_rule_names = (Rubydex::Rules::ALL + custom_rule_classes).map(&:rule_name).uniq.sort
-          unknown_rule_names = config.rules.keys.reject { |name| known_rule_names.include?(name) }.sort
+          unknown_rule_names = linter_config.rules.keys.reject { |name| known_rule_names.include?(name) }.sort
           return if unknown_rule_names.empty?
 
           formatted_names = unknown_rule_names.map { |name| "`#{name}`" }.join(", ")
@@ -75,18 +85,20 @@ module Rubydex
           abort(error.message)
         end
 
-        #: (Array[Diagnostic] diagnostics, Graph graph) -> void
-        def print_offenses(diagnostics, graph)
+        #: (Hash[singleton(Severity::Base), Array[Diagnostic]], Graph) -> void
+        def print_offenses(grouped_diagnostics, graph)
           puts("Offenses:")
           puts
 
-          diagnostics.each do |diagnostic|
-            puts(format_linter_diagnostic(diagnostic, workspace_path: graph.workspace_path))
-            print_source_excerpt(diagnostic.location)
-            puts
+          grouped_diagnostics.each do |severity, diagnostics|
+            diagnostics.each do |diagnostic|
+              puts(format_linter_diagnostic(severity, diagnostic, workspace_path: graph.workspace_path))
+              print_source_excerpt(diagnostic.location)
+              puts
+            end
           end
 
-          print_summary(graph.documents.count, diagnostics)
+          print_summary(graph.documents.count, grouped_diagnostics)
           puts("For more information about a rule, run `rdx lint explain RuleName`.")
         end
 
@@ -98,10 +110,10 @@ module Rubydex
           "#{path}:#{display_location.start_line}:#{display_location.start_column}"
         end
 
-        #: (Diagnostic diagnostic, workspace_path: String) -> String
-        def format_linter_diagnostic(diagnostic, workspace_path:)
+        #: (singleton(Severity::Base), Diagnostic, workspace_path: String) -> String
+        def format_linter_diagnostic(severity, diagnostic, workspace_path:)
           content = +"#{format_linter_location(diagnostic.location, workspace_path:)}: " \
-            "#{diagnostic.severity.value}: #{diagnostic.rule.rule_name}: #{diagnostic.message}"
+            "#{severity.value}: #{diagnostic.rule.rule_name}: #{diagnostic.message}"
 
           diagnostic.related_information.each do |information|
             content << "\n  #{format_linter_location(information.location, workspace_path:)}: #{information.message}"
@@ -136,22 +148,24 @@ module Rubydex
           @source_lines_cache[path] ||= File.readlines(path, chomp: true)
         end
 
-        #: (Integer file_count, Array[Diagnostic] diagnostics) -> void
-        def print_summary(file_count, diagnostics)
-          if diagnostics.empty?
+        #: (Integer, Hash[singleton(Severity::Base), Array[Diagnostic]]) -> void
+        def print_summary(file_count, grouped_diagnostics)
+          if grouped_diagnostics.empty?
             puts("#{file_count} #{pluralize("file", file_count)} inspected, no offenses detected")
             return
           end
 
-          severity_counts = diagnostics.map(&:severity).tally
-          offense_count = diagnostics.length
-          error_count = severity_counts.fetch(Rubydex::Severity::Error, 0)
-          warning_count = severity_counts.fetch(Rubydex::Severity::Warning, 0)
-          hint_count = severity_counts.fetch(Rubydex::Severity::Hint, 0)
+          offense_count = grouped_diagnostics.each_value.sum(&:length)
+
+          error_count = grouped_diagnostics[Rubydex::Severity::Error]&.length || 0
+          warning_count = grouped_diagnostics[Rubydex::Severity::Warning]&.length || 0
+          information_count = grouped_diagnostics[Rubydex::Severity::Information]&.length || 0
+          hint_count = grouped_diagnostics[Rubydex::Severity::Hint]&.length || 0
+
           severity_summary = [
             "#{error_count} #{pluralize("error", error_count)}",
             "#{warning_count} #{pluralize("warning", warning_count)}",
-            "#{severity_counts.fetch(Rubydex::Severity::Information, 0)} info",
+            "#{information_count} info",
             "#{hint_count} #{pluralize("hint", hint_count)}",
           ].join(", ")
 

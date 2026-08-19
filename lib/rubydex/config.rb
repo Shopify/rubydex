@@ -26,9 +26,9 @@ module Rubydex
       @rules[rule_class.rule_name]&.exclude_patterns || []
     end
 
-    #: (singleton(Rule) rule_class) -> singleton(Severity::Base)
+    #: (singleton(Rule) rule_class) -> singleton(Severity::Base)?
     def severity_for(rule_class)
-      @rules[rule_class.rule_name]&.severity || rule_class.default_severity
+      @rules[rule_class.rule_name]&.severity
     end
   end
 

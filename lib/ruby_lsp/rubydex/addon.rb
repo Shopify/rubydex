@@ -124,7 +124,9 @@ module Rubydex
           @workspace_path = global_state.workspace_path #: String
           ::Rubydex::Linter::RuleLoader.load(@workspace_path)
           @custom_rules = ::Rubydex::Linter::CustomRule.subclasses #: Array[singleton(::Rubydex::Linter::CustomRule)]
-          @runner = build_runner #: ::Rubydex::Linter::Runner
+
+          @config = ::Rubydex::Config.load(@workspace_path) #: ::Rubydex::Config
+          @runner = ::Rubydex::Linter::Runner.new(@graph, custom_rules: @custom_rules, config: @config.linter) #: ::Rubydex::Linter::Runner
 
           @current_diagnostics = {} #: Hash[String, Array[::RubyLsp::Interface::Diagnostic]]
           @diagnostics_to_clear = [] #: Array[String]
@@ -149,9 +151,11 @@ module Rubydex
           @diagnostics_to_clear = @current_diagnostics.keys
           @current_diagnostics.clear
 
-          @runner.run.diagnostics.each do |diagnostic|
+          linter_config = @config.linter
+
+          @runner.run.each do |diagnostic|
             uri = diagnostic.location.uri
-            (@current_diagnostics[uri] ||= []) << to_lsp_diagnostic(diagnostic)
+            (@current_diagnostics[uri] ||= []) << to_lsp_diagnostic(diagnostic, linter_config)
           end
 
           @diagnostics_to_clear -= @current_diagnostics.keys
@@ -159,26 +163,22 @@ module Rubydex
 
         #: () -> void
         def reload_configuration
-          @runner = build_runner
+          @config = ::Rubydex::Config.load(@workspace_path) #: ::Rubydex::Config
+          @runner = ::Rubydex::Linter::Runner.new(@graph, custom_rules: @custom_rules, config: @config.linter) #: ::Rubydex::Linter::Runner
         end
 
         private
 
-        #: () -> ::Rubydex::Linter::Runner
-        def build_runner
-          config = ::Rubydex::Config.load(@workspace_path)
-          ::Rubydex::Linter::Runner.new(@graph, custom_rules: @custom_rules, config: config.linter)
-        end
-
-        #: (::Rubydex::Diagnostic) -> ::RubyLsp::Interface::Diagnostic
-        def to_lsp_diagnostic(diagnostic)
+        #: (::Rubydex::Diagnostic, ::Rubydex::LinterConfig) -> ::RubyLsp::Interface::Diagnostic
+        def to_lsp_diagnostic(diagnostic, linter_config)
           location = diagnostic.location
+          rule = diagnostic.rule
 
           ::RubyLsp::Interface::Diagnostic.new(
             message: diagnostic.message,
             source: "Rubydex",
-            code: diagnostic.rule.rule_name,
-            severity: DIAGNOSTIC_SEVERITIES.fetch(diagnostic.severity),
+            code: rule.rule_name,
+            severity: DIAGNOSTIC_SEVERITIES.fetch(rule.severity(linter_config)),
             range: lsp_range(location),
             related_information: diagnostic.related_information.map do |information|
               ::RubyLsp::Interface::DiagnosticRelatedInformation.new(
