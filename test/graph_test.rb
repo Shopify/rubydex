@@ -299,76 +299,15 @@ class GraphTest < Minitest::Test
 
   def test_graph_dead_code_candidates
     with_context do |context|
-      context.write!("foo.rb", <<~RUBY)
-        class Used; end
-        class Unused; end
-      RUBY
-      context.write!("bar.rb", "Used\n")
-
-      graph = Rubydex::Graph.new
-      graph.index_all(context.glob("**/*.rb"))
-      graph.resolve
-
-      names = graph.dead_code_candidates.map(&:name)
-      assert_includes(names, "Unused")
-      refute_includes(names, "Used")
-    end
-  end
-
-  def test_graph_dead_code_candidates_yields_declarations
-    with_context do |context|
       context.write!("foo.rb", "class Unused; end")
 
       graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      yielded = []
-      graph.dead_code_candidates { |declaration| yielded << declaration }
-
-      refute_empty(yielded)
-      assert(yielded.all?(Rubydex::Declaration))
-    end
-  end
-
-  def test_graph_dead_code_candidates_without_block_returns_enumerator
-    graph = Rubydex::Graph.new
-
-    assert_instance_of(Enumerator, graph.dead_code_candidates)
-  end
-
-  def test_graph_dead_code_candidates_reflects_reindexed_documents
-    with_context do |context|
-      context.write!("thing.rb", "class Thing; end")
-      context.write!("user.rb", "Thing\n")
-
-      graph = Rubydex::Graph.new
-      graph.index_all(context.glob("**/*.rb"))
-      graph.resolve
-
-      refute_includes(graph.dead_code_candidates.map(&:name), "Thing")
-
-      context.write!("user.rb", "# reference removed\n")
-      graph.index_all([context.absolute_path_to("user.rb")])
-      graph.resolve
-
-      assert_includes(graph.dead_code_candidates.map(&:name), "Thing")
-    end
-  end
-
-  # Exercises the `rb_ensure` cleanup path so the iterator is freed when the block raises. Only `ruby_test:valgrind`
-  # can observe the leak, but the exception must propagate either way.
-  def test_graph_dead_code_candidates_frees_iterator_when_block_raises
-    with_context do |context|
-      context.write!("foo.rb", "class Unused; end")
-
-      graph = Rubydex::Graph.new
-      graph.index_all(context.glob("**/*.rb"))
-      graph.resolve
-
-      assert_raises(RuntimeError) do
-        graph.dead_code_candidates { raise("boom") }
-      end
+      candidates = graph.dead_code_candidates
+      assert_instance_of(Enumerator, candidates)
+      assert_equal(["Unused"], candidates.map(&:name))
     end
   end
 

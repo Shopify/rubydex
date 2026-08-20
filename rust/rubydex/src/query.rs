@@ -846,16 +846,11 @@ fn is_built_in(graph: &Graph, declaration: &Declaration) -> bool {
     })
 }
 
-/// Returns every constant-like declaration (namespace, constant or constant alias) that has zero resolved constant
-/// references and at least one definition. Declarations with a rubydex-seeded built-in definition are excluded, even
-/// when user code reopens them. Methods and variables are never included, they cannot be the target of a constant
-/// reference.
+/// Returns a list of declaration that may be unused in the codebase, which means
+/// that the analysis could not find any references to them. This misses
+/// meta-programming or untyped code, which is why the term candidates is used.
 ///
-/// Expects a resolved graph, and covers everything indexed, including dependencies.
-///
-/// The result is a working set, not an inventory. Deleting a reported declaration can leave its container
-/// unreferenced, so re-index and call again until the result comes back empty. Accuracy follows the graph's reference
-/// data, so whatever the indexer cannot see (metaprogramming, autoloading) goes uncounted.
+/// Currently, only supports constants.
 ///
 /// # Panics
 ///
@@ -880,9 +875,8 @@ pub fn dead_code_candidates(graph: &Graph) -> Vec<DeclarationId> {
                         .iter()
                         .filter(|id| {
                             let decl = declarations.get(id).unwrap();
-                            // Methods and variables are excluded here: rubydex cannot attribute method
-                            // calls to declarations, so called and uncalled both report zero references.
                             decl.constant_references().is_some_and(HashSet::is_empty)
+                                && !matches!(decl, Declaration::Namespace(Namespace::SingletonClass(_)))
                                 && !decl.has_no_definitions()
                                 && !is_built_in(graph, decl)
                         })
@@ -4190,36 +4184,21 @@ mod tests {
     }
 
     #[test]
-    fn dead_code_candidates_includes_unreferenced_explicit_singleton() {
+    fn dead_code_candidates_excludes_singleton_classes() {
         let mut context = GraphTest::new();
         context.index_uri(
             "file:///foo.rb",
             r"
-            class Referenced; end
-            class Unreferenced; end
+            class Unused; end
+            class Attached; end
 
-            class << Referenced
-              def call_me; end
-            end
-
-            class << Unreferenced
+            class << Attached
               def never_called; end
             end
-
-            Referenced.call_me
             ",
         );
         context.resolve();
 
-        // Explicit singleton definitions are actionable, and class-level calls make their reference count non-zero.
-        let names = candidate_names(&context);
-        assert!(
-            names.contains(&"Unreferenced::<Unreferenced>".to_string()),
-            "dead explicit singleton missing from {names:?}"
-        );
-        assert!(
-            !names.contains(&"Referenced::<Referenced>".to_string()),
-            "called explicit singleton unexpectedly present in {names:?}"
-        );
+        assert_eq!(vec!["Unused"], candidate_names(&context));
     }
 }
