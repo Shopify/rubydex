@@ -20,12 +20,6 @@ module Rubydex
         @graph = graph
         @config = config
         @diagnostics = [] #: Array[Diagnostic]
-        @verified_severity = nil #: singleton(Severity::Base)?
-      end
-
-      #: () -> singleton(Severity::Base)
-      def verified_severity
-        @verified_severity ||= config.severity_for(self.class)
       end
 
       # @abstract
@@ -84,7 +78,6 @@ module Rubydex
           rule: self.class,
           message: message,
           location: location,
-          severity: verified_severity,
           related_information: related_information,
         )
       end

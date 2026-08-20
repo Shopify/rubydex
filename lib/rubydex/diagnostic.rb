@@ -11,9 +11,6 @@ module Rubydex
     #: Location
     attr_reader :location
 
-    #: singleton(Severity::Base)
-    attr_reader :severity
-
     #: Array[RelatedInformation]
     attr_reader :related_information
 
@@ -21,14 +18,12 @@ module Rubydex
     #|   rule: singleton(Rule),
     #|   message: String,
     #|   location: Location,
-    #|   severity: singleton(Severity::Base),
     #|   ?related_information: Array[RelatedInformation],
     #| ) -> void
-    def initialize(rule:, message:, location:, severity:, related_information: [])
+    def initialize(rule:, message:, location:, related_information: [])
       @rule = rule
       @message = message
       @location = location
-      @severity = severity
       @related_information = related_information
     end
   end

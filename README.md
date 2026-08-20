@@ -75,9 +75,9 @@ location.path
 # Diagnostics
 diagnostic = graph.diagnostics.first
 diagnostic.rule
+diagnostic.rule.default_severity
 diagnostic.message
 diagnostic.location
-diagnostic.severity
 diagnostic.related_information
 ```
 

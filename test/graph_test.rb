@@ -2144,7 +2144,7 @@ class GraphTest < Minitest::Test
             rule: d.rule,
             path: File.basename(d.location.to_file_path),
             message: d.message,
-            severity: d.severity,
+            severity: d.rule.default_severity,
             related_information: d.related_information,
           }
         end,

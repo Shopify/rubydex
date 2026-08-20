@@ -301,6 +301,9 @@ class Rubydex::Prepend < Rubydex::Mixin; end
 class Rubydex::Extend < Rubydex::Mixin; end
 
 module Rubydex::Severity
+  # Every severity, ordered from the most to the least severe.
+  ALL = T.let(T.unsafe(nil), T::Array[T.class_of(Rubydex::Severity::Base)])
+
   sig { params(value: Symbol).returns(T.class_of(Rubydex::Severity::Base)) }
   def self.from_value(value); end
 end
@@ -328,6 +331,9 @@ class Rubydex::Rule
 
     sig { abstract.returns(T.class_of(Rubydex::Severity::Base)) }
     def default_severity; end
+
+    sig { params(config: Rubydex::LinterConfig).returns(T.class_of(Rubydex::Severity::Base)) }
+    def severity(config); end
   end
 end
 
@@ -422,11 +428,10 @@ class Rubydex::Diagnostic
       rule: T.class_of(Rubydex::Rule),
       message: String,
       location: Rubydex::Location,
-      severity: T.class_of(Rubydex::Severity::Base),
       related_information: T::Array[Rubydex::RelatedInformation],
     ).void
   end
-  def initialize(rule:, message:, location:, severity:, related_information: []); end
+  def initialize(rule:, message:, location:, related_information: []); end
 
   sig { returns(Rubydex::Location) }
   def location; end
@@ -436,9 +441,6 @@ class Rubydex::Diagnostic
 
   sig { returns(T.class_of(Rubydex::Rule)) }
   def rule; end
-
-  sig { returns(T.class_of(Rubydex::Severity::Base)) }
-  def severity; end
 
   sig { returns(T::Array[Rubydex::RelatedInformation]) }
   def related_information; end
@@ -545,9 +547,6 @@ class Rubydex::Linter::CustomRule < Rubydex::Rule
 
   sig { returns(String) }
   def rule_name; end
-
-  sig { returns(T.class_of(Rubydex::Severity::Base)) }
-  def verified_severity; end
 
   sig { abstract.void }
   def lint; end
@@ -663,19 +662,8 @@ class Rubydex::Linter::Runner
   sig { returns(T::Array[T.class_of(Rubydex::Linter::CustomRule)]) }
   def custom_rules; end
 
-  sig { returns(Rubydex::Linter::Result) }
-  def run; end
-end
-
-class Rubydex::Linter::Result
-  sig { params(diagnostics: T::Array[Rubydex::Diagnostic]).void }
-  def initialize(diagnostics); end
-
   sig { returns(T::Array[Rubydex::Diagnostic]) }
-  def diagnostics; end
-
-  sig { returns(T::Boolean) }
-  def success?; end
+  def run; end
 end
 
 class Rubydex::Keyword
@@ -757,7 +745,7 @@ class Rubydex::LinterConfig
   sig { params(rule_class: T.class_of(Rubydex::Rule)).returns(T::Array[String]) }
   def excludes_for(rule_class); end
 
-  sig { params(rule_class: T.class_of(Rubydex::Rule)).returns(T.class_of(Rubydex::Severity::Base)) }
+  sig { params(rule_class: T.class_of(Rubydex::Rule)).returns(T.nilable(T.class_of(Rubydex::Severity::Base))) }
   def severity_for(rule_class); end
 end
 

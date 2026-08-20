@@ -21,6 +21,13 @@ module Rubydex
       def default_severity
         raise NotImplementedError, "Subclasses must implement the default_severity method"
       end
+
+      # Returns the resolved severity of the rule based on the given configuration.
+      #
+      #: (LinterConfig) -> singleton(Severity::Base)
+      def severity(config)
+        config.severity_for(self) || default_severity
+      end
     end
   end
 end
