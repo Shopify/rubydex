@@ -8,8 +8,7 @@ module Rubydex
     module Helpers
       # @requires_ancestor: Rubydex::Linter::CustomRule
       module PathHelpers
-        RUBOCOP_EXCLUDE_FNMATCH_FLAGS =
-          File::FNM_PATHNAME | File::FNM_EXTGLOB | File::FNM_DOTMATCH #: Integer
+        EXCLUDE_FNMATCH_FLAGS = File::FNM_PATHNAME | File::FNM_EXTGLOB | File::FNM_DOTMATCH #: Integer
         TEST_PATHS = ["test/**", "**/test/**", "**/*_test.rb"].freeze
 
         class << self
