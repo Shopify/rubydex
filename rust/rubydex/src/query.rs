@@ -5,7 +5,7 @@ use std::thread;
 
 use url::Url;
 
-use crate::model::built_in::OBJECT_ID;
+use crate::model::built_in::{BUILT_IN_URI_ID, OBJECT_ID};
 use crate::model::declaration::{Ancestor, Declaration, Namespace};
 use crate::model::definitions::{Definition, Parameter};
 use crate::model::graph::Graph;
@@ -833,6 +833,63 @@ pub fn follow_method_alias(graph: &Graph, alias_id: DefinitionId) -> Result<Decl
     }
 }
 
+/// Returns `true` when any definition of `declaration` was seeded by rubydex rather than read from indexed source.
+///
+/// Dead code candidates are reported at declaration granularity, so a seeded definition disqualifies the declaration
+/// even when user code also reopens it.
+fn is_built_in(graph: &Graph, declaration: &Declaration) -> bool {
+    declaration.definitions().iter().any(|definition_id| {
+        graph
+            .definitions()
+            .get(definition_id)
+            .is_some_and(|definition| definition.uri_id() == &*BUILT_IN_URI_ID)
+    })
+}
+
+/// Returns a list of declarations that may be unused in the codebase, which means
+/// that the analysis could not find any references to them. This misses
+/// meta-programming or untyped code, which is why the term candidates is used.
+///
+/// Currently, only supports constants.
+///
+/// # Panics
+///
+/// Will panic if any of the threads panic
+pub fn dead_code_candidates(graph: &Graph) -> Vec<DeclarationId> {
+    let num_threads = thread::available_parallelism().map_or(4, std::num::NonZero::get);
+    let declarations = graph.declarations();
+
+    let ids: Vec<DeclarationId> = declarations.keys().copied().collect();
+    let chunk_size = ids.len().div_ceil(num_threads);
+
+    if chunk_size == 0 {
+        return Vec::new();
+    }
+
+    thread::scope(|s| {
+        let handles: Vec<_> = ids
+            .chunks(chunk_size)
+            .map(|chunk| {
+                s.spawn(|| {
+                    chunk
+                        .iter()
+                        .filter(|id| {
+                            let decl = declarations.get(id).unwrap();
+                            decl.constant_references().is_some_and(HashSet::is_empty)
+                                && !matches!(decl, Declaration::Namespace(Namespace::SingletonClass(_)))
+                                && !decl.has_no_definitions()
+                                && !is_built_in(graph, decl)
+                        })
+                        .copied()
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -914,6 +971,21 @@ mod tests {
             actual.sort();
 
             let mut expected: Vec<String> = $expected.into_iter().map(String::from).collect();
+            expected.sort();
+
+            assert_eq!(expected, actual);
+        };
+    }
+
+    macro_rules! assert_dead_code_candidates {
+        ($context:expr, [$($expected:expr),* $(,)?]) => {
+            let mut actual: Vec<String> = dead_code_candidates($context.graph())
+                .iter()
+                .map(|id| $context.graph().declarations().get(id).unwrap().name().to_string())
+                .collect();
+            actual.sort();
+
+            let mut expected: Vec<String> = vec![$(String::from($expected)),*];
             expected.sort();
 
             assert_eq!(expected, actual);
@@ -3981,5 +4053,123 @@ mod tests {
             ),
             Err(FindMemberError::DeclarationNotFound),
         );
+    }
+
+    #[test]
+    fn dead_code_candidates_returns_unreferenced_constants() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class UnusedClass; end
+            module UnusedModule; end
+            UNUSED_CONSTANT = 1
+            ",
+        );
+        context.resolve();
+
+        assert_dead_code_candidates!(context, ["UnusedClass", "UnusedModule", "UNUSED_CONSTANT"]);
+    }
+
+    #[test]
+    fn dead_code_candidates_excludes_referenced_constants() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class UsedClass; end
+            USED_CONSTANT = 1
+            ",
+        );
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+            UsedClass
+            USED_CONSTANT
+            ",
+        );
+        context.resolve();
+
+        assert_dead_code_candidates!(context, []);
+    }
+
+    #[test]
+    fn dead_code_candidates_excludes_methods_and_variables() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            $global_var = 1
+
+            class Holder
+              @@class_var = 1
+
+              def initialize
+                @instance_var = 1
+              end
+
+              def never_called; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_dead_code_candidates!(context, ["Holder"]);
+    }
+
+    #[test]
+    fn dead_code_candidates_counts_references_rather_than_reachability() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Target; end
+            AliasName = Target
+            ",
+        );
+        context.resolve();
+
+        // `AliasName` is itself dead, but it still references `Target`, giving `Target` a non-zero count.
+        // A single pass only peels the outermost layer of a dead subgraph.
+        assert_dead_code_candidates!(context, ["AliasName"]);
+    }
+
+    #[test]
+    fn dead_code_candidates_excludes_built_ins_and_definitionless_declarations() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Unused
+              def self.class_method; end
+            end
+
+            class Class
+            end
+            ",
+        );
+        context.resolve();
+
+        // A reopened built-in remains excluded regardless of definition order.
+        assert_dead_code_candidates!(context, ["Unused"]);
+    }
+
+    #[test]
+    fn dead_code_candidates_excludes_singleton_classes() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Unused; end
+            class Attached; end
+
+            class << Attached
+              def never_called; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_dead_code_candidates!(context, ["Unused"]);
     }
 }

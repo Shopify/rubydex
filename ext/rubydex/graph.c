@@ -256,6 +256,30 @@ static VALUE rdxr_graph_fuzzy_search(int argc, VALUE *argv, VALUE self) {
     return rdxr_graph_yield_search_results(self, iter);
 }
 
+/*
+ * call-seq:
+ *   dead_code_candidates -> Enumerator[Rubydex::Declaration]
+ *
+ * Returns an enumerator over declarations that may be unused because the analysis could not find any references to
+ * them. This misses metaprogramming or untyped code, which is why the term candidates is used.
+ *
+ * Currently, only supports constants.
+ */
+static VALUE rdxr_graph_dead_code_candidates(VALUE self) {
+    if (!rb_block_given_p()) {
+        return rb_enumeratorize(self, rb_str_new2("dead_code_candidates"), 0, NULL);
+    }
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    void *iter = rdx_graph_dead_code_candidates(graph);
+    VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
+    rb_ensure(rdxi_declarations_yield, args, rdxi_declarations_ensure, args);
+
+    return self;
+}
+
 // Body function for rb_ensure in Graph#documents
 static VALUE graph_documents_yield(VALUE args) {
     VALUE self = rb_ary_entry(args, 0);
@@ -938,6 +962,7 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_define_method(cGraph, "[]", rdxr_graph_aref, 1);
     rb_define_method(cGraph, "search", rdxr_graph_search, -1);
     rb_define_method(cGraph, "fuzzy_search", rdxr_graph_fuzzy_search, -1);
+    rb_define_method(cGraph, "dead_code_candidates", rdxr_graph_dead_code_candidates, 0);
     rb_define_method(cGraph, "encoding=", rdxr_graph_set_encoding, 1);
     rb_define_method(cGraph, "resolve_require_path", rdxr_graph_resolve_require_path, 2);
     rb_define_method(cGraph, "require_paths", rdxr_graph_require_paths, 1);

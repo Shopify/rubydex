@@ -133,6 +133,27 @@ pub unsafe extern "C" fn rdx_graph_declarations_fuzzy_search(
     DeclarationsIter::new(entries)
 }
 
+/// Returns an iterator over all dead code candidates in the graph.
+///
+/// # Safety
+///
+/// Expects `pointer` to be a valid graph. The returned iterator must be freed with `rdx_graph_declarations_iter_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_dead_code_candidates(pointer: GraphPointer) -> *mut DeclarationsIter {
+    let entries = with_graph(pointer, |graph| {
+        query::dead_code_candidates(graph)
+            .into_iter()
+            .filter_map(|id| {
+                let decl = graph.declarations().get(&id)?;
+                Some(CDeclaration::from_declaration(id, decl))
+            })
+            .collect::<Vec<CDeclaration>>()
+            .into_boxed_slice()
+    });
+
+    DeclarationsIter::new(entries)
+}
+
 /// # Panics
 ///
 /// Will panic if the nesting cannot be transformed into a vector of strings

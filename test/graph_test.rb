@@ -297,6 +297,20 @@ class GraphTest < Minitest::Test
     assert_raises(ArgumentError) { graph.fuzzy_search }
   end
 
+  def test_graph_dead_code_candidates
+    with_context do |context|
+      context.write!("foo.rb", "class Unused; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      candidates = graph.dead_code_candidates
+      assert_instance_of(Enumerator, candidates)
+      assert_equal(["Unused"], candidates.map(&:name))
+    end
+  end
+
   def test_workspace_path_defaults_to_pwd
     graph = Rubydex::Graph.new
     assert_equal(Dir.pwd, File.expand_path(graph.workspace_path))
