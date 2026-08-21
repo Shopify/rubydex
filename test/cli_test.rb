@@ -334,6 +334,18 @@ class CLITest < Minitest::Test
     end
   end
 
+  def test_explain_supports_built_in_rules
+    result = rdx("lint", "explain", "ParseError")
+
+    assert_success_status(result)
+    assert_stdout_equals(<<~DOCS, result)
+      Rubydex::Rules::ParseError
+
+      A parse error represents invalid Ruby syntax and a program that will fail to execute. For example, a missing
+      `end`, an unterminated string, a missing parenthesis.
+    DOCS
+  end
+
   def test_explain_accepts_a_partially_qualified_rule_name
     with_context do |context|
       context.write!("rubydex_linter/rules/exact_rule.rb", <<~RUBY)
@@ -489,6 +501,38 @@ class CLITest < Minitest::Test
 
       assert_success_status(result)
       assert_stdout_includes_pattern(result, /\d+ files inspected, no offenses detected/)
+    end
+  end
+
+  def test_lint_considers_built_in_rules_when_warning_for_unknown_configuration
+    with_context do |context|
+      context.write!("rubydex.toml", <<~TOML)
+        [linter.rules.ParseError]
+        exclude = ["**/foo.rb"]
+      TOML
+      Rubydex::Linter::CustomRule.stubs(:subclasses).returns([])
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("lint")
+
+      assert_success_status(result)
+      refute_stderr_includes(result, "linter config references rules that were not loaded")
+    end
+  end
+
+  def test_lint_warns_about_unknown_rules_in_configuration
+    with_context do |context|
+      context.write!("rubydex.toml", <<~TOML)
+        [linter.rules.UnknownRule]
+        exclude = ["**/foo.rb"]
+      TOML
+      Rubydex::Linter::CustomRule.stubs(:subclasses).returns([Rubydex::Linter::Rules::RuleStructure])
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("lint")
+
+      assert_success_status(result)
+      assert_stderr_includes(result, "linter config references rules that were not loaded: `UnknownRule`")
     end
   end
 

@@ -4,7 +4,7 @@ module Rubydex
   module Linter
     # Loads project and bundled-gem rules using the Rubydex linter path convention.
     class RuleLoader
-      BUILT_IN_RULE_GLOB = File.expand_path("../../rubydex_linter/rules/**/*.rb", __dir__) #: String
+      BUILT_IN_RULE_GLOB = File.expand_path("../../{rubydex_linter,rubydex}/rules/**/*.rb", __dir__) #: String
       RULE_GLOB = "rubydex_linter/rules/**/*.rb" #: String
 
       class << self

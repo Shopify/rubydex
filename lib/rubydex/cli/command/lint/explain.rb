@@ -9,8 +9,10 @@ module Rubydex
       class Lint
         # `rdx lint explain <RULE>` — prints documentation for rules with a matching name.
         class Explain < Command
-          BASE_RULE_NAME = "Rubydex::Linter::CustomRule" #: String
-          BASE_RULE_PATH = File.expand_path("../../../linter/custom_rule.rb", __dir__) #: String
+          BASE_PATHS = [
+            File.expand_path("../../../linter/custom_rule.rb", __dir__),
+            File.expand_path("../../../rule.rb", __dir__),
+          ] #: Array[String]
 
           class << self
             #: -> String
@@ -30,17 +32,17 @@ module Rubydex
             workspace_path = current_workspace_path
 
             graph = Rubydex::Graph.configure_for_workspace(workspace_path)
-            graph.index_all([BASE_RULE_PATH, *Rubydex::Linter::RuleLoader.paths(workspace_path)])
+            graph.index_all([*BASE_PATHS, *Rubydex::Linter::RuleLoader.paths(workspace_path)])
             graph.resolve
 
-            base_rule = graph[BASE_RULE_NAME]
-            abort("Base rule class #{BASE_RULE_NAME} is not found. This is likely an issue in Rubydex itself") unless base_rule.is_a?(Rubydex::Class)
+            base_rule = graph["Rubydex::Rule"]
+            abort("Base rule class is not found. This is an issue in Rubydex itself") unless base_rule.is_a?(Rubydex::Class)
 
             rule_declarations = base_rule.descendants.grep(Rubydex::Class) #: as Array[Rubydex::Class]
             matched_rule_names = rule_declarations.filter_map do |declaration|
               declaration_name = declaration.name
               next unless declaration_name
-              next if declaration_name == BASE_RULE_NAME
+              next if declaration_name == "Rubydex::Rule" || declaration_name == "Rubydex::Linter::CustomRule"
               next unless declaration_name.end_with?(rule_name)
 
               declaration
