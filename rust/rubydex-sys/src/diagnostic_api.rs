@@ -32,7 +32,6 @@ impl From<Severity> for DiagnosticSeverity {
 pub struct CRule {
     pub name: *const c_char,
     pub name_length: usize,
-    pub default_severity: DiagnosticSeverity,
 }
 
 impl From<Rule> for CRule {
@@ -42,41 +41,7 @@ impl From<Rule> for CRule {
         Self {
             name: name.as_ptr().cast::<c_char>(),
             name_length: name.len(),
-            default_severity: DiagnosticSeverity::from(rule.default_severity()),
         }
-    }
-}
-
-#[repr(C)]
-pub struct CRuleArray {
-    pub items: *mut CRule,
-    pub len: usize,
-}
-
-/// Returns every rule the graph can report. Caller must free it with `rdx_rules_free`.
-#[unsafe(no_mangle)]
-pub extern "C" fn rdx_rules() -> CRuleArray {
-    let items = Rule::all().iter().copied().map(CRule::from).collect::<Box<[CRule]>>();
-
-    CRuleArray {
-        len: items.len(),
-        items: Box::into_raw(items).cast::<CRule>(),
-    }
-}
-
-/// Frees an array previously returned by `rdx_rules`.
-///
-/// # Safety
-///
-/// - `rules` must have been returned by `rdx_rules` and must not be used afterwards.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_rules_free(rules: CRuleArray) {
-    if rules.items.is_null() {
-        return;
-    }
-
-    unsafe {
-        let _ = Box::from_raw(ptr::slice_from_raw_parts_mut(rules.items, rules.len));
     }
 }
 
