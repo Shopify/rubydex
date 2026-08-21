@@ -835,8 +835,8 @@ pub fn follow_method_alias(graph: &Graph, alias_id: DefinitionId) -> Result<Decl
 
 /// Returns `true` when any definition of `declaration` was seeded by rubydex rather than read from indexed source.
 ///
-/// Candidates are reported at declaration granularity, so a seeded definition disqualifies the declaration even when
-/// user code also reopens it.
+/// Dead code candidates are reported at declaration granularity, so a seeded definition disqualifies the declaration
+/// even when user code also reopens it.
 fn is_built_in(graph: &Graph, declaration: &Declaration) -> bool {
     declaration.definitions().iter().any(|definition_id| {
         graph
@@ -846,7 +846,7 @@ fn is_built_in(graph: &Graph, declaration: &Declaration) -> bool {
     })
 }
 
-/// Returns a list of declaration that may be unused in the codebase, which means
+/// Returns a list of declarations that may be unused in the codebase, which means
 /// that the analysis could not find any references to them. This misses
 /// meta-programming or untyped code, which is why the term candidates is used.
 ///
@@ -971,6 +971,21 @@ mod tests {
             actual.sort();
 
             let mut expected: Vec<String> = $expected.into_iter().map(String::from).collect();
+            expected.sort();
+
+            assert_eq!(expected, actual);
+        };
+    }
+
+    macro_rules! assert_dead_code_candidates {
+        ($context:expr, [$($expected:expr),* $(,)?]) => {
+            let mut actual: Vec<String> = dead_code_candidates($context.graph())
+                .iter()
+                .map(|id| $context.graph().declarations().get(id).unwrap().name().to_string())
+                .collect();
+            actual.sort();
+
+            let mut expected: Vec<String> = vec![$(String::from($expected)),*];
             expected.sort();
 
             assert_eq!(expected, actual);
@@ -4040,15 +4055,6 @@ mod tests {
         );
     }
 
-    fn candidate_names(context: &GraphTest) -> Vec<String> {
-        let mut names: Vec<String> = dead_code_candidates(context.graph())
-            .iter()
-            .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-            .collect();
-        names.sort();
-        names
-    }
-
     #[test]
     fn dead_code_candidates_returns_unreferenced_constants() {
         let mut context = GraphTest::new();
@@ -4062,13 +4068,7 @@ mod tests {
         );
         context.resolve();
 
-        let names = candidate_names(&context);
-        for expected in ["UnusedClass", "UnusedModule", "UNUSED_CONSTANT"] {
-            assert!(
-                names.contains(&expected.to_string()),
-                "{expected} missing from {names:?}"
-            );
-        }
+        assert_dead_code_candidates!(context, ["UnusedClass", "UnusedModule", "UNUSED_CONSTANT"]);
     }
 
     #[test]
@@ -4090,13 +4090,7 @@ mod tests {
         );
         context.resolve();
 
-        let names = candidate_names(&context);
-        for unexpected in ["UsedClass", "USED_CONSTANT"] {
-            assert!(
-                !names.contains(&unexpected.to_string()),
-                "{unexpected} unexpectedly present in {names:?}"
-            );
-        }
+        assert_dead_code_candidates!(context, []);
     }
 
     #[test]
@@ -4120,22 +4114,7 @@ mod tests {
         );
         context.resolve();
 
-        let unexpected: Vec<&str> = dead_code_candidates(context.graph())
-            .iter()
-            .map(|id| context.graph().declarations().get(id).unwrap())
-            .filter(|decl| {
-                !matches!(
-                    decl,
-                    Declaration::Namespace(_) | Declaration::Constant(_) | Declaration::ConstantAlias(_)
-                )
-            })
-            .map(Declaration::name)
-            .collect();
-
-        assert!(
-            unexpected.is_empty(),
-            "candidates that are not constant-like: {unexpected:?}"
-        );
+        assert_dead_code_candidates!(context, ["Holder"]);
     }
 
     #[test]
@@ -4152,15 +4131,7 @@ mod tests {
 
         // `AliasName` is itself dead, but it still references `Target`, giving `Target` a non-zero count.
         // A single pass only peels the outermost layer of a dead subgraph.
-        let names = candidate_names(&context);
-        assert!(
-            names.contains(&"AliasName".to_string()),
-            "AliasName missing from {names:?}"
-        );
-        assert!(
-            !names.contains(&"Target".to_string()),
-            "Target unexpectedly present in {names:?}"
-        );
+        assert_dead_code_candidates!(context, ["AliasName"]);
     }
 
     #[test]
@@ -4179,8 +4150,8 @@ mod tests {
         );
         context.resolve();
 
-        // Exact equality catches over-inclusion. Reopening `Class` guards against relying on definition order.
-        assert_eq!(vec!["Unused"], candidate_names(&context));
+        // A reopened built-in remains excluded regardless of definition order.
+        assert_dead_code_candidates!(context, ["Unused"]);
     }
 
     #[test]
@@ -4199,6 +4170,6 @@ mod tests {
         );
         context.resolve();
 
-        assert_eq!(vec!["Unused"], candidate_names(&context));
+        assert_dead_code_candidates!(context, ["Unused"]);
     }
 }
