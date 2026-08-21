@@ -64,10 +64,10 @@ pub enum Severity {
 }
 
 macro_rules! rules {
-    ($($(#[$attribute:meta])* $rule:ident),+ $(,)?) => {
+    ($($(#[doc = $documentation:literal])+ $rule:ident => $severity:ident),+ $(,)?) => {
         #[derive(Debug, Copy, Clone, PartialEq, Eq)]
         pub enum Rule {
-            $($(#[$attribute])* $rule,)+
+            $($(#[doc = $documentation])+ $rule,)+
         }
 
         impl Rule {
@@ -75,60 +75,98 @@ macro_rules! rules {
             pub fn all() -> &'static [Self] {
                 &[$(Self::$rule,)+]
             }
+
+            #[must_use]
+            pub fn name(&self) -> &'static str {
+                match self {
+                    $(Self::$rule => stringify!($rule),)+
+                }
+            }
+
+            #[must_use]
+            pub fn default_severity(&self) -> Severity {
+                match self {
+                    $(Self::$rule => Severity::$severity,)+
+                }
+            }
+
+            #[must_use]
+            pub fn documentation(&self) -> &'static [&'static str] {
+                match self {
+                    $(Self::$rule => &[$($documentation,)+],)+
+                }
+            }
         }
     };
 }
 
 rules! {
-    // Parsing
-    ParseError,
-    ParseWarning,
+    // ******** Parsing ******** //
 
-    // Indexing
-    DynamicConstantReference,
-    DynamicSingletonDefinition,
-    DynamicAncestor,
-    TopLevelMixinSelf,
-    InvalidConstantVisibility,
-    InvalidMethodVisibility,
+    /// A parse error represents invalid Ruby syntax and a program that will fail to execute. For example, a missing
+    /// `end`, an unterminated string, a missing parenthesis.
+    ParseError => Error,
 
-    // Resolution
-    UndefinedMethodVisibilityTarget,
-    UndefinedConstantVisibilityTarget,
-}
+    /// Parse warnings represent code that has valid syntax, but may not do what the developer expects. For example,
+    /// local variables that are completely unused or usage in a void context (creating a line of code that does
+    /// nothing).
+    ///
+    /// ```ruby
+    /// CONST = 1
+    /// CONST # <<< void context
+    /// puts CONST + 2
+    /// ```
+    ParseWarning => Warning,
 
-impl Rule {
-    #[must_use]
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::ParseError => "ParseError",
-            Self::ParseWarning => "ParseWarning",
-            Self::DynamicConstantReference => "DynamicConstantReference",
-            Self::DynamicSingletonDefinition => "DynamicSingletonDefinition",
-            Self::DynamicAncestor => "DynamicAncestor",
-            Self::TopLevelMixinSelf => "TopLevelMixinSelf",
-            Self::InvalidConstantVisibility => "InvalidConstantVisibility",
-            Self::InvalidMethodVisibility => "InvalidMethodVisibility",
-            Self::UndefinedMethodVisibilityTarget => "UndefinedMethodVisibilityTarget",
-            Self::UndefinedConstantVisibilityTarget => "UndefinedConstantVisibilityTarget",
-        }
-    }
+    // ******** Indexing ******** //
 
-    #[must_use]
-    pub fn default_severity(&self) -> Severity {
-        match self {
-            Self::ParseError => Severity::Error,
-            Self::ParseWarning
-            | Self::InvalidConstantVisibility
-            | Self::InvalidMethodVisibility
-            | Self::UndefinedMethodVisibilityTarget
-            | Self::UndefinedConstantVisibilityTarget => Severity::Warning,
-            Self::DynamicConstantReference
-            | Self::DynamicSingletonDefinition
-            | Self::DynamicAncestor
-            | Self::TopLevelMixinSelf => Severity::Information,
-        }
-    }
+    /// A dynamic constant reference usage is not necessarily a mistake, but Rubydex cannot reason about it due to its
+    /// dynamic nature. For example, `var::Foo`. It's not possible to determine what `Foo` is being referred to because
+    /// `var` is a value that depends on the runtime. Using this type of pattern will degrade the quality of the
+    /// analysis as Rubydex might be missing some information about how the code truly behaves.
+    DynamicConstantReference => Information,
+
+    /// A dynamic singleton block target is not necessarily a mistake, but Rubydex cannot reason about it due to its
+    /// dynamic nature. For example, in `class << var` or `def var.foo`, it's not possible to determine statically what
+    /// is being defined since `var` is a value that depends on the runtime. Using this type of pattern will degrade the
+    /// quality of the analysis as Rubydex might be missing some information about how the code truly behaves.
+    DynamicSingletonDefinition => Information,
+
+    /// A dynamic ancestor is not necessarily a mistake, but Rubydex cannot reason about it due to its dynamic nature.
+    /// For example, in `class Child < var` or `include var`, it's not possible to determine statically what ancestor is
+    /// being used since `var` is a value that depends on the runtime. Using this type of pattern will degrade the
+    /// quality of the analysis as Rubydex might be missing some information about how the code truly behaves.
+    DynamicAncestor => Information,
+
+    /// The top level of a Ruby program is the special <main> object. It is not possible to use `include self` or
+    /// `extend self` on that object.
+    TopLevelMixinSelf => Information,
+
+    /// Reports the usage of a constant visibility operation (`public_constant`, `private_constant`) where either the
+    /// receiver or the arguments are dynamic and cannot be analyzed statically. For example, in `public_constant(var)`
+    /// or `var.public_constant(:Foo)`, it's not possible to determine statically what constant is being changed since
+    /// `var` is a value that depends on the runtime. Using this type of pattern will degrade the quality of the
+    /// analysis as Rubydex might be missing some information about how the code truly behaves.
+    InvalidConstantVisibility => Warning,
+
+    /// Reports a method visibility call that cannot be applied.
+    ///
+    /// `private`, `public`, `protected` and `module_function` need an enclosing namespace and literal arguments.
+    /// Calling one at the top level or with a computed argument leaves the visibility of the methods unchanged. A
+    /// wrapped `attr_*` call (`private attr_reader :foo`) is only understood when it is the single argument.
+    InvalidMethodVisibility => Warning,
+
+    // ******** Resolution ******** //
+
+    /// Reports a method visibility operation naming a method that doesn't exist in the namespace. For example, `private
+    /// :foo`, where `foo` is not defined anywhere in the ancestor chain of the owner.
+    UndefinedMethodVisibilityTarget => Warning,
+
+    /// Reports a constant visibility change naming a constant the namespace does not have.
+    ///
+    /// The call itself was understood and its target namespace resolved, but no constant by that name was ever defined
+    /// there, so there is nothing to change. This is usually a typo or a leftover from a constant that was removed.
+    UndefinedConstantVisibilityTarget => Warning,
 }
 
 impl std::fmt::Display for Rule {

@@ -31,3 +31,5 @@ require "rubydex/graph"
 require "rubydex/declaration"
 require "rubydex/signature"
 require "rubydex/reference"
+
+Dir.glob("#{__dir__}/rubydex/rules/**/*.rb").each { |file| require file }
