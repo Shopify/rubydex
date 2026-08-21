@@ -4,6 +4,7 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+pub mod cfg;
 pub mod compile_assertions;
 pub mod config;
 pub mod diagnostic;
