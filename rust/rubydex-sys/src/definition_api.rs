@@ -3,10 +3,11 @@
 use crate::declaration_api::CDeclaration;
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
+use crate::name_api::raw_name_for_name_id;
 use crate::reference_api::CConstantReference;
 use libc::c_char;
 use rubydex::model::definitions::{Definition, Mixin};
-use rubydex::model::ids::DefinitionId;
+use rubydex::model::ids::{DefinitionId, NameId};
 use rubydex::query::AliasResolutionError;
 use std::ffi::CString;
 use std::ptr;
@@ -107,6 +108,84 @@ pub unsafe extern "C" fn rdx_definition_name(pointer: GraphPointer, definition_i
         } else {
             ptr::null()
         }
+    })
+}
+
+fn definition_constant_path_name_id(definition: &Definition) -> Option<NameId> {
+    match definition {
+        Definition::Class(definition) => Some(*definition.name_id()),
+        Definition::Module(definition) => Some(*definition.name_id()),
+        Definition::Constant(definition) => Some(*definition.name_id()),
+        Definition::ConstantAlias(definition) => Some(*definition.name_id()),
+        _ => None,
+    }
+}
+
+/// Returns the constant path as it appeared in source for a definition id, or NULL if the definition has no constant
+/// path. Caller must free with `free_c_string`.
+///
+/// # Safety
+///
+/// Assumes pointer is valid.
+///
+/// # Panics
+///
+/// This function will panic if the definition's name cannot be reconstructed or contains an interior null byte.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_definition_constant_path_raw_name(
+    pointer: GraphPointer,
+    definition_id: u64,
+) -> *const c_char {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(definition_id);
+        let Some(definition) = graph.definitions().get(&def_id) else {
+            return ptr::null();
+        };
+        let Some(name_id) = definition_constant_path_name_id(definition) else {
+            return ptr::null();
+        };
+
+        CString::new(raw_name_for_name_id(graph, name_id))
+            .unwrap()
+            .into_raw()
+            .cast_const()
+    })
+}
+
+/// Returns the location of the final name in a definition's constant path, or NULL if the definition has no constant
+/// path. Caller must free with `rdx_location_free`.
+///
+/// # Safety
+///
+/// Assumes pointer is valid.
+///
+/// # Panics
+///
+/// This function will panic if the definition's document cannot be found.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_definition_constant_path_location(
+    pointer: GraphPointer,
+    definition_id: u64,
+) -> *mut Location {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(definition_id);
+        let Some(definition) = graph.definitions().get(&def_id) else {
+            return ptr::null_mut();
+        };
+
+        let offset = match definition {
+            Definition::Class(definition) => definition.name_offset(),
+            Definition::Module(definition) => definition.name_offset(),
+            Definition::Constant(definition) => definition.offset(),
+            Definition::ConstantAlias(definition) => definition.offset(),
+            _ => return ptr::null_mut(),
+        };
+        let document = graph
+            .documents()
+            .get(definition.uri_id())
+            .expect("document should exist");
+
+        create_location_for_uri_and_offset(graph, document, offset)
     })
 }
 

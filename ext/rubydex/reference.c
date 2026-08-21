@@ -38,6 +38,23 @@ static VALUE rdxr_constant_reference_name(VALUE self) {
 
 /*
  * call-seq:
+ *   raw_name -> String
+ *
+ * Returns the constant path as it appeared in source, preserving explicit parent scopes and a leading `::`.
+ */
+static VALUE rdxr_constant_reference_raw_name(VALUE self) {
+    HandleData *data;
+    void *graph = rdxi_graph_from_handle(self, &data);
+
+    const char *name = rdx_constant_reference_raw_name(graph, data->id);
+    if (name == NULL) {
+        rb_raise(rb_eRuntimeError, "Constant reference must exist for a valid id");
+    }
+    return rdxi_owned_c_string_to_ruby(name);
+}
+
+/*
+ * call-seq:
  *   location -> Rubydex::Location
  *
  * Returns the source location for this constant reference.
@@ -189,6 +206,7 @@ void rdxi_initialize_reference(VALUE mRubydex) {
     cConstantReference = rb_define_class_under(mRubydex, "ConstantReference", cReference);
     rb_define_alloc_func(cConstantReference, rdxr_handle_alloc);
     rb_define_method(cConstantReference, "initialize", rdxr_handle_initialize, 2);
+    rb_define_method(cConstantReference, "raw_name", rdxr_constant_reference_raw_name, 0);
     rb_define_method(cConstantReference, "location", rdxr_constant_reference_location, 0);
     rb_define_method(cConstantReference, "document", rdxr_constant_reference_document, 0);
     rb_funcall(rb_singleton_class(cConstantReference), rb_intern("private"), 1, ID2SYM(rb_intern("new")));

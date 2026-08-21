@@ -5,6 +5,7 @@ require "uri"
 
 # Files that must be loaded before the C extension
 require "rubydex/version"
+require "rubydex/constant_helper"
 require "rubydex/mixin"
 require "rubydex/severity"
 

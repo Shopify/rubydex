@@ -6,6 +6,37 @@ require "helpers/context"
 class ReferencesTest < Minitest::Test
   include Test::Helpers::WithContext
 
+  def test_constant_reference_raw_name
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module Foo
+          class Bar; end
+        end
+
+        Foo::Bar
+        ::Foo::Bar
+        Unknown::Thing
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      file_uri = context.uri_to("file1.rb")
+      references = graph.constant_references.select { |reference| reference.location.uri == file_uri }.to_h do |reference|
+        [reference.location.to_display.to_s, reference]
+      end
+      path = context.absolute_path_to("file1.rb")
+
+      assert_equal("Foo", references.fetch("#{path}:5:1-5:4").raw_name)
+      assert_equal("Foo::Bar", references.fetch("#{path}:5:6-5:9").raw_name)
+      assert_equal("::Foo", references.fetch("#{path}:6:3-6:6").raw_name)
+      assert_equal("::Foo::Bar", references.fetch("#{path}:6:8-6:11").raw_name)
+      assert_equal("Unknown", references.fetch("#{path}:7:1-7:8").raw_name)
+      assert_equal("Unknown::Thing", references.fetch("#{path}:7:10-7:15").raw_name)
+    end
+  end
+
   def test_graph_constant_references_enumerator
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)

@@ -808,6 +808,47 @@ class DefinitionTest < Minitest::Test
     end
   end
 
+  def test_definition_constant_path
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module Foo
+          class Bar; end
+          class ::Rooted; end
+          module Baz::Qux; end
+          CONST = 1
+          ALIAS_CONST = Bar
+
+          def foo; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      definitions = graph.documents.find { |document| document.uri == context.uri_to("file1.rb") }.definitions.to_a
+      paths = definitions
+        .select { |definition| definition.is_a?(Rubydex::ConstantHelper) }
+        .to_h { |definition| [[definition.class, definition.name], definition.constant_path] }
+
+      assert_equal("Foo", paths.fetch([Rubydex::ModuleDefinition, "Foo"]).raw_name)
+      assert_equal("Bar", paths.fetch([Rubydex::ClassDefinition, "Bar"]).raw_name)
+      assert_equal("::Rooted", paths.fetch([Rubydex::ClassDefinition, "Rooted"]).raw_name)
+      assert_equal("Baz::Qux", paths.fetch([Rubydex::ModuleDefinition, "Qux"]).raw_name)
+      assert_equal("CONST", paths.fetch([Rubydex::ConstantDefinition, "CONST"]).raw_name)
+      assert_equal("ALIAS_CONST", paths.fetch([Rubydex::ConstantAliasDefinition, "ALIAS_CONST"]).raw_name)
+
+      paths.each_value do |constant_path|
+        assert_kind_of(Rubydex::ConstantReference, constant_path)
+        assert_equal(context.uri_to("file1.rb"), constant_path.document.uri)
+        assert_equal(context.uri_to("file1.rb"), constant_path.location.uri)
+      end
+
+      method_definition = definitions.find { |definition| definition.is_a?(Rubydex::MethodDefinition) }
+      refute_kind_of(Rubydex::ConstantHelper, method_definition)
+    end
+  end
+
   def test_definition_declaration
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)

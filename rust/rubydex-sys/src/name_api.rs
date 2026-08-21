@@ -1,5 +1,35 @@
 use rubydex::model::{graph::Graph, ids::NameId, name::ParentScope};
 
+/// Reconstructs the constant path represented by a name, without including its lexical nesting.
+pub(crate) fn raw_name_for_name_id(graph: &Graph, name_id: NameId) -> String {
+    let mut raw_name = String::new();
+    append_raw_name(graph, name_id, &mut raw_name);
+    raw_name
+}
+
+fn append_raw_name(graph: &Graph, name_id: NameId, raw_name: &mut String) {
+    let name = graph
+        .names()
+        .get(&name_id)
+        .expect("name should exist while building a raw name");
+    let simple_name = graph
+        .strings()
+        .get(name.str())
+        .expect("string should exist while building a raw name")
+        .as_str();
+
+    match name.parent_scope() {
+        ParentScope::None => {}
+        ParentScope::TopLevel => raw_name.push_str("::"),
+        ParentScope::Some(parent_id) | ParentScope::Attached(parent_id) => {
+            append_raw_name(graph, *parent_id, raw_name);
+            raw_name.push_str("::");
+        }
+    }
+
+    raw_name.push_str(simple_name);
+}
+
 /// Takes a constant name and a nesting stack (e.g.: `["Foo", "Bar::Baz", "Qux"]`) and transforms it into a `NameId`,
 /// registering each required part in the graph. Returns the `NameId` and a list of name ids that need to be untracked
 /// afterwards. Returns `None` if the constant name contains no valid identifier parts (e.g.: `""`, `"::"`, `"Foo::"`).
@@ -181,5 +211,14 @@ mod tests {
         assert_eq!(StringId::from("Foo"), *foo_name.str());
         assert!(foo_name.parent_scope().is_none());
         assert!(foo_name.nesting().is_none());
+    }
+
+    #[test]
+    fn raw_name_preserves_parent_scope_without_lexical_nesting() {
+        let mut graph = Graph::new();
+
+        let (name_id, _) = nesting_stack_to_name_id(&mut graph, "::Foo::Bar", vec!["LexicalOwner".into()]).unwrap();
+
+        assert_eq!("::Foo::Bar", raw_name_for_name_id(&graph, name_id));
     }
 }
