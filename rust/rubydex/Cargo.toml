@@ -15,6 +15,10 @@ categories = ["development-tools"]
 name = "rubydex_cli"
 path = "src/main.rs"
 
+[[bin]]
+name = "generate_ruby_rules"
+path = "src/bin/generate_ruby_rules.rs"
+
 [lib]
 crate-type = ["rlib"]
 
