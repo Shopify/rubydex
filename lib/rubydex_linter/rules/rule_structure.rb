@@ -37,6 +37,8 @@ module Rubydex
           rule_definitions_by_file = {} #: Hash[String, Hash[Rubydex::Class, Definition]]
 
           rules.each do |rule|
+            rule_docs = []
+
             rule.definitions.each do |rule_definition|
               uri = rule_definition.document.uri
               path = path_for_uri(uri)
@@ -48,6 +50,8 @@ module Rubydex
               elsif !test_file?(path)
                 report_wrong_rule_directory(rule.name, rule_definition)
               end
+
+              rule_docs.concat(rule_definition.comments)
             end
 
             rule_definition = rule.definitions.find do |definition|
@@ -55,9 +59,19 @@ module Rubydex
               path_in_workspace?(path) && (rule_file?(path) || !test_file?(path))
             end
             next unless rule_definition
-            next if rule.name.start_with?("#{RULE_NAMESPACE}::")
 
-            report_wrong_rule_namespace(rule.name, rule_definition)
+            rule_name = rule.name
+
+            if rule_docs.empty?
+              add_diagnostic(
+                "`#{rule_name}` is missing documentation.",
+                diagnostic_location(rule_definition),
+              )
+            end
+
+            next if rule_name.start_with?("#{RULE_NAMESPACE}::")
+
+            report_wrong_rule_namespace(rule_name, rule_definition)
           end
 
           rule_definitions_by_file.each do |uri, rule_definitions|

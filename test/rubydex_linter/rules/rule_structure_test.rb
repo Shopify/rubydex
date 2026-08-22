@@ -34,6 +34,8 @@ module Rubydex
             "rubydex_linter/rules/base_rule.rb" => rule_source("BaseRule"),
             "rubydex_linter/rules/indirect_rule.rb" => <<~RUBY,
               class Rubydex::Linter::Rules::Helper; end
+
+              # Documents the IndirectRule rule.
               class Rubydex::Linter::Rules::IndirectRule < Rubydex::Linter::Rules::BaseRule; end
             RUBY
           )
@@ -46,6 +48,8 @@ module Rubydex
               class Rubydex::Linter::Rules::FirstRule; end
               ^{} Each rule file must define only one linter rule; found 2.
                                             ^^^^^^^^^ `Rubydex::Linter::Rules::FirstRule` is defined here.
+
+              # Documents the SecondRule rule.
               class Rubydex::Linter::Rules::SecondRule < Rubydex::Linter::CustomRule; end
                                             ^^^^^^^^^^ `Rubydex::Linter::Rules::SecondRule` is defined here.
             RUBY
@@ -65,6 +69,7 @@ module Rubydex
           assert_diagnostics(
             "rubydex_linter/rules/wrong_namespace.rb" => <<~RUBY,
               module ConsumerRules
+                # Documents the WrongNamespace rule.
                 class WrongNamespace < Rubydex::Linter::CustomRule; end
                       ^^^^^^^^^^^^^^ `ConsumerRules::WrongNamespace` must be defined under `Rubydex::Linter::Rules`.
               end
@@ -75,8 +80,18 @@ module Rubydex
         def test_reports_a_rule_class_outside_a_rule_directory
           assert_diagnostics(
             "app/rules/wrong_place.rb" => <<~RUBY,
+              # Documents the WrongPlace rule.
               class Rubydex::Linter::Rules::WrongPlace < Rubydex::Linter::CustomRule; end
                                             ^^^^^^^^^^ `Rubydex::Linter::Rules::WrongPlace` must be defined under `rubydex_linter/rules/` or `lib/rubydex_linter/rules/`.
+            RUBY
+          )
+        end
+
+        def test_reports_an_undocumented_rule_class
+          assert_diagnostics(
+            "rubydex_linter/rules/undocumented_rule.rb" => <<~RUBY,
+              class Rubydex::Linter::Rules::UndocumentedRule < Rubydex::Linter::CustomRule; end
+                                            ^^^^^^^^^^^^^^^^ `Rubydex::Linter::Rules::UndocumentedRule` is missing documentation.
             RUBY
           )
         end
@@ -95,7 +110,10 @@ module Rubydex
 
         #: (String) -> String
         def rule_source(class_name)
-          "class Rubydex::Linter::Rules::#{class_name} < Rubydex::Linter::CustomRule; end\n"
+          <<~RUBY
+            # Documents the #{class_name} rule.
+            class Rubydex::Linter::Rules::#{class_name} < Rubydex::Linter::CustomRule; end
+          RUBY
         end
       end
     end
