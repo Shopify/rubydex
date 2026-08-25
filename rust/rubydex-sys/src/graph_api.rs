@@ -10,9 +10,10 @@ use crate::{name_api, utils};
 use libc::{c_char, c_void};
 use rubydex::config::Config;
 use rubydex::indexing::LanguageId;
+use rubydex::model::definitions::Definition;
 use rubydex::model::encoding::Encoding;
 use rubydex::model::graph::Graph;
-use rubydex::model::ids::{DeclarationId, NameId, UriId, declaration_id_from_lookup_name};
+use rubydex::model::ids::{DeclarationId, DefinitionId, NameId, UriId, declaration_id_from_lookup_name};
 use rubydex::model::keywords;
 use rubydex::model::name::NameRef;
 use rubydex::model::visibility::Visibility;
@@ -176,22 +177,101 @@ pub unsafe extern "C" fn rdx_graph_resolve_constant(
             return ptr::null();
         };
 
-        let mut resolver = Resolver::new(graph);
+        resolve_constant_name(graph, name_id, names_to_untrack)
+    })
+}
 
-        let declaration = match resolver.resolve_constant(name_id) {
-            Some(id) => {
-                let decl = graph.declarations().get(&id).unwrap();
-                Box::into_raw(Box::new(CDeclaration::from_declaration(id, decl))).cast_const()
+/// Result of resolving a constant using a namespace definition as its lexical context.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CDefinitionConstantResolution {
+    Resolved = 0,
+    NotFound = 1,
+    DefinitionNotFound = 2,
+    InvalidDefinitionKind = 3,
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct CDefinitionConstantResolutionResult {
+    pub status: CDefinitionConstantResolution,
+    pub declaration: *const CDeclaration,
+}
+
+/// Resolves a constant using a namespace definition as its lexical context.
+///
+/// # Panics
+///
+/// Panics if `const_name` cannot be converted to a string.
+///
+/// # Safety
+///
+/// Assumes that `pointer` and `const_name` are valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_resolve_constant_from_definition(
+    pointer: GraphPointer,
+    const_name: *const c_char,
+    definition_id: u64,
+) -> CDefinitionConstantResolutionResult {
+    with_mut_graph(pointer, |graph| {
+        let const_name: String = unsafe { utils::convert_char_ptr_to_string(const_name).unwrap() };
+        let nesting = match class_or_module_definition_name_id(graph, DefinitionId::new(definition_id)) {
+            Ok(nesting) => nesting,
+            Err(status) => {
+                return CDefinitionConstantResolutionResult {
+                    status,
+                    declaration: ptr::null(),
+                };
             }
-            None => ptr::null(),
         };
 
-        for name_id in names_to_untrack {
-            graph.untrack_name(name_id);
-        }
+        let Some((name_id, names_to_untrack)) = name_api::name_in_nesting_to_name_id(graph, &const_name, Some(nesting))
+        else {
+            return CDefinitionConstantResolutionResult {
+                status: CDefinitionConstantResolution::NotFound,
+                declaration: ptr::null(),
+            };
+        };
 
-        declaration
+        let declaration = resolve_constant_name(graph, name_id, names_to_untrack);
+        let status = if declaration.is_null() {
+            CDefinitionConstantResolution::NotFound
+        } else {
+            CDefinitionConstantResolution::Resolved
+        };
+
+        CDefinitionConstantResolutionResult { status, declaration }
     })
+}
+
+fn class_or_module_definition_name_id(
+    graph: &Graph,
+    definition_id: DefinitionId,
+) -> Result<NameId, CDefinitionConstantResolution> {
+    let Some(definition) = graph.definitions().get(&definition_id) else {
+        return Err(CDefinitionConstantResolution::DefinitionNotFound);
+    };
+
+    match definition {
+        Definition::Class(definition) => Ok(*definition.name_id()),
+        Definition::SingletonClass(definition) => Ok(*definition.name_id()),
+        Definition::Module(definition) => Ok(*definition.name_id()),
+        _ => Err(CDefinitionConstantResolution::InvalidDefinitionKind),
+    }
+}
+
+fn resolve_constant_name(graph: &mut Graph, name_id: NameId, names_to_untrack: Vec<NameId>) -> *const CDeclaration {
+    let declaration_id = Resolver::new(graph).resolve_constant(name_id);
+    let declaration = declaration_id.map_or(ptr::null(), |id| {
+        let declaration = graph.declarations().get(&id).unwrap();
+        Box::into_raw(Box::new(CDeclaration::from_declaration(id, declaration))).cast_const()
+    });
+
+    for name_id in names_to_untrack {
+        graph.untrack_name(name_id);
+    }
+
+    declaration
 }
 
 /// Adds glob patterns to exclude from file discovery during indexing.

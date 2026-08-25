@@ -27,6 +27,33 @@ pub fn nesting_stack_to_name_id(
     );
 
     let (ParentScope::Some(name_id) | ParentScope::Attached(name_id)) = current_name else {
+        // Invalid names may leave temporary parts in the graph (e.g. `Foo` from `Foo::`).
+        for name_id in names_to_untrack {
+            graph.untrack_name(name_id);
+        }
+        return None;
+    };
+
+    Some((name_id, names_to_untrack))
+}
+
+/// Takes a constant name and an existing lexical nesting and transforms it into a `NameId`, registering each required
+/// part in the graph. Returns the `NameId` and a list of name ids that need to be untracked afterwards.
+pub fn name_in_nesting_to_name_id(
+    graph: &mut Graph,
+    const_name: &str,
+    nesting: Option<NameId>,
+) -> Option<(NameId, Vec<NameId>)> {
+    let mut current_name = ParentScope::None;
+    let mut names_to_untrack = Vec::new();
+
+    process_qualified_name(graph, const_name, nesting, &mut current_name, &mut names_to_untrack);
+
+    let (ParentScope::Some(name_id) | ParentScope::Attached(name_id)) = current_name else {
+        // Invalid names may leave temporary parts in the graph (e.g. `Foo` from `Foo::`).
+        for name_id in names_to_untrack {
+            graph.untrack_name(name_id);
+        }
         return None;
     };
 
@@ -175,5 +202,20 @@ mod tests {
         assert_eq!(StringId::from("Foo"), *foo_name.str());
         assert!(foo_name.parent_scope().is_none());
         assert!(foo_name.nesting().is_none());
+    }
+
+    #[test]
+    fn invalid_names_are_untracked() {
+        let mut graph = Graph::new();
+        let name_count = graph.names().len();
+        let string_count = graph.strings().len();
+
+        assert!(nesting_stack_to_name_id(&mut graph, "Foo::", vec!["Bar".into()]).is_none());
+        assert_eq!(name_count, graph.names().len());
+        assert_eq!(string_count, graph.strings().len());
+
+        assert!(name_in_nesting_to_name_id(&mut graph, "Foo::", None).is_none());
+        assert_eq!(name_count, graph.names().len());
+        assert_eq!(string_count, graph.strings().len());
     }
 }
