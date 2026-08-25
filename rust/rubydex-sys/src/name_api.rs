@@ -13,13 +13,7 @@ pub fn nesting_stack_to_name_id(
     let mut names_to_untrack = Vec::new();
 
     for entry in nesting {
-        process_qualified_name(
-            graph,
-            &entry,
-            &mut current_name,
-            &mut current_nesting,
-            &mut names_to_untrack,
-        );
+        process_qualified_name(graph, &entry, current_nesting, &mut current_name, &mut names_to_untrack);
         current_nesting = current_name.as_ref().copied();
         current_name = ParentScope::None;
     }
@@ -27,8 +21,8 @@ pub fn nesting_stack_to_name_id(
     process_qualified_name(
         graph,
         const_name,
+        current_nesting,
         &mut current_name,
-        &mut current_nesting,
         &mut names_to_untrack,
     );
 
@@ -47,8 +41,8 @@ pub fn nesting_stack_to_name_id(
 fn process_qualified_name(
     graph: &mut Graph,
     qualified_name: &str,
+    current_nesting: Option<NameId>,
     current_name: &mut ParentScope,
-    current_nesting: &mut Option<NameId>,
     names_to_untrack: &mut Vec<NameId>,
 ) {
     for part in qualified_name.split("::") {
@@ -60,13 +54,13 @@ fn process_qualified_name(
         let (parent_scope, nesting_for_part) = if part.starts_with('<') {
             let attached_id = match *current_name {
                 ParentScope::Some(id) | ParentScope::Attached(id) => Some(id),
-                _ => *current_nesting,
+                _ => current_nesting,
             };
 
             let attached = attached_id.map_or(ParentScope::None, ParentScope::Attached);
             (attached, attached_id)
         } else {
-            (*current_name, *current_nesting)
+            (*current_name, current_nesting)
         };
 
         let str_id = graph.intern_string(part.to_owned());
