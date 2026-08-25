@@ -906,8 +906,18 @@ class Rubydex::Graph
   sig { returns(T.self_type) }
   def resolve; end
 
-  sig { params(name: String, nesting: T::Array[String]).returns(T.nilable(Rubydex::Declaration)) }
-  def resolve_constant(name, nesting); end
+  sig do
+    params(
+      name: String,
+      context: T.any(
+        T::Array[String],
+        Rubydex::ClassDefinition,
+        Rubydex::SingletonClassDefinition,
+        Rubydex::ModuleDefinition,
+      ),
+    ).returns(T.nilable(Rubydex::Declaration))
+  end
+  def resolve_constant(name, context); end
 
   sig { params(require_path: String, load_paths: T::Array[String]).returns(T.nilable(Rubydex::Document)) }
   def resolve_require_path(require_path, load_paths); end

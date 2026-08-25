@@ -22,6 +22,9 @@ extern VALUE cGlobalVariableAliasDefinition;
 
 void rdxi_initialize_definition(VALUE mRubydex);
 
+// Returns the definition ID after verifying that the definition belongs to `graph_obj`.
+uint64_t rdxi_definition_id_for_graph(VALUE definition, VALUE graph_obj);
+
 // Returns the Ruby class for a given DefinitionKind without calling back into Rust
 VALUE rdxi_definition_class_for_kind(DefinitionKind kind);
 
