@@ -808,6 +808,95 @@ class DefinitionTest < Minitest::Test
     end
   end
 
+  def test_definition_raw_name
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          class Bar; end
+          class ::Baz; end
+          module Qux::Quux; end
+          module ::Root::Nested; end
+
+          CONST = 1
+          ::ROOT_CONST = 2
+          Foo::NESTED_CONST = 3
+          ALIAS_CONST = Baz
+
+          class << self; end
+          def foo; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      definitions = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }.definitions.to_a
+      raw_names = definitions
+        .select { |definition| definition.respond_to?(:raw_name) }
+        .map { |definition| [definition.class, definition.name, definition.raw_name] }
+
+      assert_includes(raw_names, [Rubydex::ClassDefinition, "Foo", "Foo"])
+      assert_includes(raw_names, [Rubydex::ClassDefinition, "Bar", "Bar"])
+      assert_includes(raw_names, [Rubydex::ClassDefinition, "Baz", "::Baz"])
+      assert_includes(raw_names, [Rubydex::ModuleDefinition, "Quux", "Qux::Quux"])
+      assert_includes(raw_names, [Rubydex::ModuleDefinition, "Nested", "::Root::Nested"])
+      assert_includes(raw_names, [Rubydex::ConstantDefinition, "CONST", "CONST"])
+      assert_includes(raw_names, [Rubydex::ConstantDefinition, "ROOT_CONST", "::ROOT_CONST"])
+      assert_includes(raw_names, [Rubydex::ConstantDefinition, "NESTED_CONST", "Foo::NESTED_CONST"])
+      assert_includes(raw_names, [Rubydex::ConstantAliasDefinition, "ALIAS_CONST", "ALIAS_CONST"])
+
+      method_def = definitions.find { |definition| definition.is_a?(Rubydex::MethodDefinition) }
+      refute_respond_to(method_def, :raw_name)
+
+      singleton_class_def = definitions.find { |definition| definition.is_a?(Rubydex::SingletonClassDefinition) }
+      refute_respond_to(singleton_class_def, :raw_name)
+    end
+  end
+
+  def test_definition_raw_name_can_build_constant_resolution_nesting
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Bar
+          class Baz; end
+        end
+
+        class Foo
+          class Baz; end
+
+          class ::Bar; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      definitions = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }.definitions
+      bar_def = definitions.find do |definition|
+        definition.is_a?(Rubydex::ClassDefinition) && definition.raw_name == "::Bar"
+      end
+      nesting = bar_def.lexical_nesting.reverse.map(&:raw_name) << bar_def.raw_name
+
+      assert_equal(["Foo", "::Bar"], nesting)
+      assert_equal("Bar::Baz", graph.resolve_constant("Baz", nesting).name)
+    end
+  end
+
+  def test_definition_raw_name_raises_when_definition_is_gone
+    with_context do |context|
+      context.write!("file1.rb", "class Foo; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      definition = graph.document(context.uri_to("file1.rb")).definitions.first
+
+      graph.delete_document(context.uri_to("file1.rb"))
+
+      error = assert_raises(RuntimeError) { definition.raw_name }
+      assert_equal("Definition not found", error.message)
+    end
+  end
+
   def test_definition_declaration
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)
