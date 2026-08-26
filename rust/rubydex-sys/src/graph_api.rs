@@ -173,11 +173,11 @@ pub unsafe extern "C" fn rdx_graph_resolve_constant(
         let nesting: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(nesting, count).unwrap() };
         let const_name: String = unsafe { utils::convert_char_ptr_to_string(const_name).unwrap() };
 
-        let Some((name_id, names_to_untrack)) = name_api::nesting_stack_to_name_id(graph, &const_name, nesting) else {
+        let Some(scoped_name) = name_api::nesting_stack_to_scoped_name(graph, &const_name, nesting) else {
             return ptr::null();
         };
 
-        resolve_constant_name(graph, name_id, names_to_untrack)
+        resolve_constant_name(scoped_name)
     })
 }
 
@@ -225,15 +225,14 @@ pub unsafe extern "C" fn rdx_graph_resolve_constant_from_definition(
             }
         };
 
-        let Some((name_id, names_to_untrack)) = name_api::name_in_nesting_to_name_id(graph, &const_name, Some(nesting))
-        else {
+        let Some(scoped_name) = name_api::name_in_nesting_to_scoped_name(graph, &const_name, Some(nesting)) else {
             return CDefinitionConstantResolutionResult {
                 status: CDefinitionConstantResolution::NotFound,
                 declaration: ptr::null(),
             };
         };
 
-        let declaration = resolve_constant_name(graph, name_id, names_to_untrack);
+        let declaration = resolve_constant_name(scoped_name);
         let status = if declaration.is_null() {
             CDefinitionConstantResolution::NotFound
         } else {
@@ -260,18 +259,13 @@ fn class_or_module_definition_name_id(
     }
 }
 
-fn resolve_constant_name(graph: &mut Graph, name_id: NameId, names_to_untrack: Vec<NameId>) -> *const CDeclaration {
-    let declaration_id = Resolver::new(graph).resolve_constant(name_id);
-    let declaration = declaration_id.map_or(ptr::null(), |id| {
-        let declaration = graph.declarations().get(&id).unwrap();
+fn resolve_constant_name(mut scoped_name: name_api::ScopedName<'_>) -> *const CDeclaration {
+    let name_id = scoped_name.name_id();
+    let declaration_id = Resolver::new(scoped_name.graph_mut()).resolve_constant(name_id);
+    declaration_id.map_or(ptr::null(), |id| {
+        let declaration = scoped_name.graph().declarations().get(&id).unwrap();
         Box::into_raw(Box::new(CDeclaration::from_declaration(id, declaration))).cast_const()
-    });
-
-    for name_id in names_to_untrack {
-        graph.untrack_name(name_id);
-    }
-
-    declaration
+    })
 }
 
 /// Adds glob patterns to exclude from file discovery during indexing.
@@ -815,19 +809,19 @@ pub unsafe extern "C" fn rdx_completion_candidates_free(ptr: *mut CompletionCand
     }
 }
 
-/// Converts the nesting stack into a `NameId`.
+/// Converts the nesting stack into a scoped name.
 /// The last element of the nesting stack is treated as the self type; if the stack is empty, `"Object"` is used.
 ///
-/// Returns `Err` if the nesting array contains invalid UTF-8.
+/// Returns `None` if the nesting array contains invalid UTF-8.
 ///
 /// # Safety
 ///
 /// `nesting` must point to `nesting_count` valid, null-terminated UTF-8 strings.
-unsafe fn completion_nesting_name_id(
+unsafe fn completion_scoped_name(
     graph: &mut Graph,
     nesting: *const *const c_char,
     nesting_count: usize,
-) -> Option<(NameId, Vec<NameId>)> {
+) -> Option<name_api::ScopedName<'_>> {
     let mut nesting: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(nesting, nesting_count).ok()? };
 
     // When serving completion in a bare script, the self (top level) context is Object
@@ -837,7 +831,7 @@ unsafe fn completion_nesting_name_id(
         nesting.pop().unwrap()
     };
 
-    name_api::nesting_stack_to_name_id(graph, &self_name, nesting)
+    name_api::nesting_stack_to_scoped_name(graph, &self_name, nesting)
 }
 
 /// The result of a completion operation, carrying either a candidate array or an error message.
@@ -866,19 +860,10 @@ impl CompletionResult {
 }
 
 /// Runs completion for the given receiver and returns a structured result with candidates or an error message
-fn run_and_finalize_completion(
-    graph: &mut Graph,
-    receiver: CompletionReceiver,
-    names_to_untrack: Vec<NameId>,
-) -> CompletionResult {
+fn run_and_finalize_completion(graph: &Graph, receiver: CompletionReceiver) -> CompletionResult {
     let candidates = match query::completion_candidates(graph, CompletionContext::new(receiver)) {
         Ok(candidates) => candidates,
-        Err(e) => {
-            for name_id in names_to_untrack {
-                graph.untrack_name(name_id);
-            }
-            return CompletionResult::error(&e.to_string());
-        }
+        Err(e) => return CompletionResult::error(&e.to_string()),
     };
 
     let entries: Vec<CCompletionCandidate> = candidates
@@ -926,10 +911,6 @@ fn run_and_finalize_completion(
         })
         .collect();
 
-    for name_id in names_to_untrack {
-        graph.untrack_name(name_id);
-    }
-
     CompletionResult::success(CompletionCandidateArray::from_vec(entries))
 }
 
@@ -950,20 +931,19 @@ pub unsafe extern "C" fn rdx_graph_complete_expression(
     self_receiver: *const c_char,
 ) -> CompletionResult {
     with_mut_graph(pointer, |graph| {
-        let Some((name_id, names_to_untrack)) = (unsafe { completion_nesting_name_id(graph, nesting, nesting_count) })
-        else {
+        let Some(scoped_name) = (unsafe { completion_scoped_name(graph, nesting, nesting_count) }) else {
             return CompletionResult::success(ptr::null_mut());
         };
+        let name_id = scoped_name.name_id();
 
         let self_decl_id = unsafe { decl_id_from_char_ptr(self_receiver) };
 
         run_and_finalize_completion(
-            graph,
+            scoped_name.graph(),
             CompletionReceiver::Expression {
                 self_decl_id,
                 nesting_name_id: name_id,
             },
-            names_to_untrack,
         )
     })
 }
@@ -997,7 +977,6 @@ pub unsafe extern "C" fn rdx_graph_complete_namespace_access(
                 self_decl_id,
                 namespace_decl_id: declaration_id_from_lookup_name(&name_str),
             },
-            Vec::new(),
         )
     })
 }
@@ -1031,7 +1010,6 @@ pub unsafe extern "C" fn rdx_graph_complete_method_call(
                 self_decl_id,
                 receiver_decl_id: declaration_id_from_lookup_name(&name_str),
             },
-            Vec::new(),
         )
     })
 }
@@ -1060,22 +1038,20 @@ pub unsafe extern "C" fn rdx_graph_complete_method_argument(
     };
 
     with_mut_graph(pointer, |graph| {
-        let Some((nesting_name_id, names_to_untrack)) =
-            (unsafe { completion_nesting_name_id(graph, nesting, nesting_count) })
-        else {
+        let Some(scoped_name) = (unsafe { completion_scoped_name(graph, nesting, nesting_count) }) else {
             return CompletionResult::success(ptr::null_mut());
         };
+        let nesting_name_id = scoped_name.name_id();
 
         let self_decl_id = unsafe { decl_id_from_char_ptr(self_receiver) };
 
         run_and_finalize_completion(
-            graph,
+            scoped_name.graph(),
             CompletionReceiver::MethodArgument {
                 self_decl_id,
                 nesting_name_id,
                 method_decl_id: declaration_id_from_lookup_name(&name_str),
             },
-            names_to_untrack,
         )
     })
 }
@@ -1246,7 +1222,9 @@ mod tests {
                 nesting_ptrs.as_ptr(),
                 nesting_ptrs.len(),
             );
+            assert!(!decl.is_null());
             assert_eq!((*decl).id(), *DeclarationId::from("Foo::BAR"));
+            crate::declaration_api::free_c_declaration(decl);
         };
 
         let graph = unsafe { Box::from_raw(graph_ptr.cast::<RwLock<Graph>>()) };
@@ -1266,6 +1244,74 @@ mod tests {
                 })
                 .unwrap()
                 .ref_count()
+        );
+    }
+
+    #[test]
+    fn names_are_untracked_after_completion_error() {
+        let mut indexer = RubyIndexer::new(
+            "file:///foo.rb".into(),
+            "
+            class Foo
+            end
+            ",
+        );
+        indexer.index();
+
+        let mut graph = Graph::new();
+        graph.consume_document_changes(indexer.local_graph());
+        let mut resolver = Resolver::new(&mut graph);
+        resolver.resolve();
+
+        let (foo_name_id, foo_string_id, name_ref_count, string_ref_count) = graph
+            .names()
+            .iter()
+            .find_map(|(name_id, name)| {
+                let string_id = *name.str();
+                if graph.strings().get(&string_id).unwrap().as_str() == "Foo"
+                    && name.parent_scope().is_none()
+                    && name.nesting().is_none()
+                {
+                    Some((
+                        *name_id,
+                        string_id,
+                        name.ref_count(),
+                        graph.strings().get(&string_id).unwrap().ref_count(),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let name_count = graph.names().len();
+        let string_count = graph.strings().len();
+
+        let graph_ptr = Box::into_raw(Box::new(RwLock::new(graph))) as GraphPointer;
+        let nesting_strings = [CString::new("Foo").unwrap()];
+        let nesting_ptrs: Vec<*const c_char> = nesting_strings.iter().map(|s| s.as_ptr()).collect();
+        let self_receiver = CString::new("Nonexistent").unwrap();
+
+        let result = unsafe {
+            rdx_graph_complete_expression(
+                graph_ptr,
+                nesting_ptrs.as_ptr(),
+                nesting_ptrs.len(),
+                self_receiver.as_ptr(),
+            )
+        };
+        assert!(result.candidates.is_null());
+        assert!(!result.error.is_null());
+        utils::free_c_string(result.error);
+
+        let graph = unsafe { Box::from_raw(graph_ptr.cast::<RwLock<Graph>>()) };
+        let graph = graph.read().unwrap();
+
+        assert_eq!(name_count, graph.names().len());
+        assert_eq!(string_count, graph.strings().len());
+        assert_eq!(name_ref_count, graph.names().get(&foo_name_id).unwrap().ref_count());
+        assert_eq!(
+            string_ref_count,
+            graph.strings().get(&foo_string_id).unwrap().ref_count()
         );
     }
 }
