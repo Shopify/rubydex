@@ -38,6 +38,17 @@ VALUE cClassVariableDefinition;
 VALUE cMethodAliasDefinition;
 VALUE cGlobalVariableAliasDefinition;
 
+uint64_t rdxi_definition_id_for_graph(VALUE definition, VALUE graph_obj) {
+    HandleData *data;
+    TypedData_Get_Struct(definition, HandleData, &handle_type, data);
+
+    if (data->graph_obj != graph_obj) {
+        rb_raise(rb_eArgError, "definition must belong to this graph");
+    }
+
+    return data->id;
+}
+
 // Keep this in sync with definition.rs
 VALUE rdxi_definition_class_for_kind(DefinitionKind kind) {
     switch (kind) {

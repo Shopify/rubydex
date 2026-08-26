@@ -1,6 +1,7 @@
 #include "graph.h"
 #include "config.h"
 #include "declaration.h"
+#include "definition.h"
 #include "diagnostic.h"
 #include "document.h"
 #include "location.h"
@@ -510,26 +511,48 @@ static VALUE rdxr_graph_set_encoding(VALUE self, VALUE encoding) {
 
 /*
  * call-seq:
- *   resolve_constant(name, nesting) -> Rubydex::Declaration?
+ *   resolve_constant(name, context) -> Rubydex::Declaration?
  *
- * Runs the resolver on a single constant reference to determine what it points to.
+ * Runs the resolver on a single constant reference using an array of nesting names or a namespace definition as its
+ * context.
  */
-static VALUE rdxr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nesting) {
+static VALUE rdxr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE context) {
     Check_Type(const_name, T_STRING);
-    rdxi_check_array_of_strings(nesting);
     const char *const_name_string = StringValueCStr(const_name);
-
-    // Convert the given file paths into a char** array, so that we can pass to Rust
-    size_t length = RARRAY_LEN(nesting);
-    char **converted_file_paths = rdxi_str_array_to_char(nesting, length);
 
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    const CDeclaration *decl =
-        rdx_graph_resolve_constant(graph, const_name_string, (const char **)converted_file_paths, length);
+    const CDeclaration *decl;
+    if (RB_TYPE_P(context, T_ARRAY)) {
+        rdxi_check_array_of_strings(context);
 
-    rdxi_free_str_array(converted_file_paths, length);
+        size_t length = RARRAY_LEN(context);
+        char **converted_names = rdxi_str_array_to_char(context, length);
+        decl = rdx_graph_resolve_constant(graph, const_name_string, (const char **)converted_names, length);
+        rdxi_free_str_array(converted_names, length);
+    } else if (rb_obj_is_kind_of(context, cClassDefinition) ||
+               rb_obj_is_kind_of(context, cSingletonClassDefinition) ||
+               rb_obj_is_kind_of(context, cModuleDefinition)) {
+        uint64_t definition_id = rdxi_definition_id_for_graph(context, self);
+        CDefinitionConstantResolutionResult result =
+            rdx_graph_resolve_constant_from_definition(graph, const_name_string, definition_id);
+
+        if (result.status == CDefinitionConstantResolution_DefinitionNotFound) {
+            rb_raise(rb_eRuntimeError, "Definition not found");
+        }
+        if (result.status == CDefinitionConstantResolution_InvalidDefinitionKind) {
+            // This is unreachable because the rb_obj_is_kind_of checks above only accept supported definition kinds.
+            rb_raise(rb_eRuntimeError, "Unexpected definition kind");
+        }
+
+        decl = result.declaration;
+    } else {
+        rb_raise(
+            rb_eTypeError,
+            "context must be an Array of Strings, ClassDefinition, SingletonClassDefinition, or ModuleDefinition"
+        );
+    }
 
     if (decl == NULL) {
         return Qnil;

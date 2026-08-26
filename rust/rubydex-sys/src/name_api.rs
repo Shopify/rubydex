@@ -13,13 +13,7 @@ pub fn nesting_stack_to_name_id(
     let mut names_to_untrack = Vec::new();
 
     for entry in nesting {
-        process_qualified_name(
-            graph,
-            &entry,
-            &mut current_name,
-            &mut current_nesting,
-            &mut names_to_untrack,
-        );
+        process_qualified_name(graph, &entry, current_nesting, &mut current_name, &mut names_to_untrack);
         current_nesting = current_name.as_ref().copied();
         current_name = ParentScope::None;
     }
@@ -27,12 +21,39 @@ pub fn nesting_stack_to_name_id(
     process_qualified_name(
         graph,
         const_name,
+        current_nesting,
         &mut current_name,
-        &mut current_nesting,
         &mut names_to_untrack,
     );
 
     let (ParentScope::Some(name_id) | ParentScope::Attached(name_id)) = current_name else {
+        // Invalid names may leave temporary parts in the graph (e.g. `Foo` from `Foo::`).
+        for name_id in names_to_untrack {
+            graph.untrack_name(name_id);
+        }
+        return None;
+    };
+
+    Some((name_id, names_to_untrack))
+}
+
+/// Takes a constant name and an existing lexical nesting and transforms it into a `NameId`, registering each required
+/// part in the graph. Returns the `NameId` and a list of name ids that need to be untracked afterwards.
+pub fn name_in_nesting_to_name_id(
+    graph: &mut Graph,
+    const_name: &str,
+    nesting: Option<NameId>,
+) -> Option<(NameId, Vec<NameId>)> {
+    let mut current_name = ParentScope::None;
+    let mut names_to_untrack = Vec::new();
+
+    process_qualified_name(graph, const_name, nesting, &mut current_name, &mut names_to_untrack);
+
+    let (ParentScope::Some(name_id) | ParentScope::Attached(name_id)) = current_name else {
+        // Invalid names may leave temporary parts in the graph (e.g. `Foo` from `Foo::`).
+        for name_id in names_to_untrack {
+            graph.untrack_name(name_id);
+        }
         return None;
     };
 
@@ -47,8 +68,8 @@ pub fn nesting_stack_to_name_id(
 fn process_qualified_name(
     graph: &mut Graph,
     qualified_name: &str,
+    current_nesting: Option<NameId>,
     current_name: &mut ParentScope,
-    current_nesting: &mut Option<NameId>,
     names_to_untrack: &mut Vec<NameId>,
 ) {
     for part in qualified_name.split("::") {
@@ -60,13 +81,13 @@ fn process_qualified_name(
         let (parent_scope, nesting_for_part) = if part.starts_with('<') {
             let attached_id = match *current_name {
                 ParentScope::Some(id) | ParentScope::Attached(id) => Some(id),
-                _ => *current_nesting,
+                _ => current_nesting,
             };
 
             let attached = attached_id.map_or(ParentScope::None, ParentScope::Attached);
             (attached, attached_id)
         } else {
-            (*current_name, *current_nesting)
+            (*current_name, current_nesting)
         };
 
         let str_id = graph.intern_string(part.to_owned());
@@ -181,5 +202,20 @@ mod tests {
         assert_eq!(StringId::from("Foo"), *foo_name.str());
         assert!(foo_name.parent_scope().is_none());
         assert!(foo_name.nesting().is_none());
+    }
+
+    #[test]
+    fn invalid_names_are_untracked() {
+        let mut graph = Graph::new();
+        let name_count = graph.names().len();
+        let string_count = graph.strings().len();
+
+        assert!(nesting_stack_to_name_id(&mut graph, "Foo::", vec!["Bar".into()]).is_none());
+        assert_eq!(name_count, graph.names().len());
+        assert_eq!(string_count, graph.strings().len());
+
+        assert!(name_in_nesting_to_name_id(&mut graph, "Foo::", None).is_none());
+        assert_eq!(name_count, graph.names().len());
+        assert_eq!(string_count, graph.strings().len());
     }
 }

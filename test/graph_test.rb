@@ -401,6 +401,121 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_graph_resolve_constant_with_definition_context
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        module Foo
+          OUTER_CONST = 1
+
+          class Bar
+            INNER_CONST = 2
+
+            class << self
+              SINGLETON_CONST = 3
+            end
+            def target; end
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      definitions = graph.document(context.uri_to("foo.rb")).definitions
+      foo_definition = definitions.find do |definition|
+        definition.is_a?(Rubydex::ModuleDefinition) && definition.name == "Foo"
+      end
+      bar_definition = definitions.find do |definition|
+        definition.is_a?(Rubydex::ClassDefinition) && definition.name == "Bar"
+      end
+      method_definition = definitions.find do |definition|
+        definition.is_a?(Rubydex::MethodDefinition) && definition.name == "target()"
+      end
+      singleton_definition = definitions.find do |definition|
+        definition.is_a?(Rubydex::SingletonClassDefinition)
+      end
+
+      assert_equal("Foo::OUTER_CONST", graph.resolve_constant("OUTER_CONST", foo_definition).name)
+      assert_equal("Foo::Bar::INNER_CONST", graph.resolve_constant("INNER_CONST", bar_definition).name)
+      assert_equal("Foo::OUTER_CONST", graph.resolve_constant("OUTER_CONST", bar_definition).name)
+      assert_equal("Foo::Bar::<Bar>::SINGLETON_CONST", graph.resolve_constant("SINGLETON_CONST", singleton_definition).name)
+      assert_equal("Foo::Bar::INNER_CONST", graph.resolve_constant("INNER_CONST", singleton_definition).name)
+      assert_raises(TypeError) do
+        graph.resolve_constant("INNER_CONST", method_definition)
+      end
+    end
+  end
+
+  def test_graph_resolve_constant_with_external_singleton_definition_context
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        class Foo; end
+
+        class Bar
+          OUTER_CONST = 1
+
+          class << Foo
+            SINGLETON_CONST = 2
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      singleton_definition = graph.document(context.uri_to("foo.rb")).definitions.find do |definition|
+        definition.is_a?(Rubydex::SingletonClassDefinition)
+      end
+
+      assert_equal("Foo::<Foo>::SINGLETON_CONST", graph.resolve_constant("SINGLETON_CONST", singleton_definition).name)
+      assert_equal("Bar::OUTER_CONST", graph.resolve_constant("OUTER_CONST", singleton_definition).name)
+    end
+  end
+
+  def test_graph_resolve_constant_with_deleted_definition_context
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo; end", "ruby")
+    graph.resolve
+    definition = graph.document("file:///foo.rb").definitions.first
+
+    graph.delete_document("file:///foo.rb")
+
+    error = assert_raises(RuntimeError) do
+      graph.resolve_constant("CONST", definition)
+    end
+    assert_equal("Definition not found", error.message)
+  end
+
+  def test_graph_resolve_constant_with_rooted_definition_context
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        class Bar
+          class Baz; end
+        end
+
+        module Foo
+          OUTER_CONST = 1
+
+          class ::Bar; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      definitions = graph.document(context.uri_to("foo.rb")).definitions
+      rooted_bar_definition = definitions.find do |definition|
+        definition.is_a?(Rubydex::ClassDefinition) && definition.name == "Bar" && definition.lexical_owner&.name == "Foo"
+      end
+
+      assert_equal("Bar::Baz", graph.resolve_constant("Baz", rooted_bar_definition).name)
+      assert_equal("Foo::OUTER_CONST", graph.resolve_constant("OUTER_CONST", rooted_bar_definition).name)
+    end
+  end
+
   def test_graph_resolve_with_invalid_argument
     graph = Rubydex::Graph.new
 
