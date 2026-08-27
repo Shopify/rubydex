@@ -19,7 +19,6 @@ module Rubydex
         RULE_NAMESPACE = "Rubydex::Linter::Rules" #: String
         RULE_FILE_PATTERNS = [
           "rubydex_linter/rules/**/*.rb",
-          "lib/rubydex_linter/rules/**/*.rb",
           "**/lib/rubydex_linter/rules/**/*.rb",
         ].freeze #: Array[String]
         TEST_FILE_PATTERNS = ["test/**/*", "**/test/**/*"].freeze #: Array[String]
