@@ -17,6 +17,25 @@ module Rubydex
         graph.load_config(Config.load(workspace_path))
         graph
       end
+
+      # Returns the paths for the core and standard library RBS definitions of the latest installation of the `rbs` gem,
+      # which are the definitions for Ruby itself. Tools that build their own list of paths and index it with
+      # `index_all` must append these paths, otherwise the graph will have no definitions for core classes like `Object`
+      # or `Kernel`.
+      #
+      # This method does not require `rbs` to be a part of the bundle. It searches for whatever latest installation of
+      # `rbs` exists in the system and returns an empty array if we can't find one
+      #
+      #: -> Array[String]
+      def core_rbs_definition_paths
+        rbs_gem_path = Gem.path
+          .flat_map { |path| Dir.glob(File.join(path, "gems", "rbs-[0-9]*/")) }
+          .max_by { |path| Gem::Version.new(File.basename(path).delete_prefix("rbs-")) }
+
+        return [] unless rbs_gem_path
+
+        [File.join(rbs_gem_path, "core"), File.join(rbs_gem_path, "stdlib")]
+      end
     end
 
     # Index all files and dependencies of the workspace that exists in `workspace_path`
@@ -69,20 +88,12 @@ module Rubydex
       end
     end
 
-    # Searches for the latest installation of the `rbs` gem and adds the paths for the core and stdlib RBS definitions
-    # to the list of paths. This method does not require `rbs` to be a part of the bundle. It searches for whatever
-    # latest installation of `rbs` exists in the system and fails silently if we can't find one
+    # Adds the paths for the core and stdlib RBS definitions to the list of paths. Fails silently if no installation of
+    # the `rbs` gem can be found. See `Graph.core_rbs_definition_paths`
     #
     #: (Array[String]) -> void
     def add_core_rbs_definition_paths(paths)
-      rbs_gem_path = Gem.path
-        .flat_map { |path| Dir.glob(File.join(path, "gems", "rbs-[0-9]*/")) }
-        .max_by { |path| Gem::Version.new(File.basename(path).delete_prefix("rbs-")) }
-
-      return unless rbs_gem_path
-
-      paths << File.join(rbs_gem_path, "core")
-      paths << File.join(rbs_gem_path, "stdlib")
+      paths.concat(Graph.core_rbs_definition_paths)
     end
   end
 end
