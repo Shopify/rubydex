@@ -9,7 +9,8 @@ module Rubydex
       # - Each rule subclass outside a test directory is in a rule directory.
       # - Each checked rule subclass is in the `Rubydex::Linter::Rules` namespace.
       #
-      # The rule directories are `rubydex_linter/rules/` and `lib/rubydex_linter/rules/`.
+      # The rule directories are `rubydex_linter/rules/` and `lib/rubydex_linter/rules/`, including
+      # `lib/rubydex_linter/rules/` directories in nested gems.
       # This rule does not report files in those directories that define no rule subclass.
       class RuleStructure < CustomRule
         include Helpers::SourceAccessHelpers
@@ -18,7 +19,7 @@ module Rubydex
         RULE_NAMESPACE = "Rubydex::Linter::Rules" #: String
         RULE_FILE_PATTERNS = [
           "rubydex_linter/rules/**/*.rb",
-          "lib/rubydex_linter/rules/**/*.rb",
+          "**/lib/rubydex_linter/rules/**/*.rb",
         ].freeze #: Array[String]
         TEST_FILE_PATTERNS = ["test/**/*", "**/test/**/*"].freeze #: Array[String]
 

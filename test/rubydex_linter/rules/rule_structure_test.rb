@@ -29,6 +29,12 @@ module Rubydex
           )
         end
 
+        def test_allows_rule_classes_in_nested_gem_rule_directories
+          assert_no_diagnostics(
+            "gems/example/lib/rubydex_linter/rules/nested_gem_rule.rb" => rule_source("NestedGemRule"),
+          )
+        end
+
         def test_allows_indirect_rule_subclasses_and_helper_classes
           assert_no_diagnostics(
             "rubydex_linter/rules/base_rule.rb" => rule_source("BaseRule"),
