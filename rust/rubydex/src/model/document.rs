@@ -6,7 +6,7 @@ use xxhash_rust::xxh3::xxh3_64;
 
 use crate::assert_mem_size;
 use crate::diagnostic::Diagnostic;
-use crate::model::ids::{ConstantReferenceId, DefinitionId, MethodReferenceId};
+use crate::model::ids::{ConstantReferenceId, DeferredCallId, DefinitionId, MethodReferenceId};
 
 // Represents a document currently loaded into memory. Identified by its unique URI, it holds the edges to all
 // definitions and references discovered in it
@@ -17,10 +17,11 @@ pub struct Document {
     definition_ids: Vec<DefinitionId>,
     method_reference_ids: Vec<MethodReferenceId>,
     constant_reference_ids: Vec<ConstantReferenceId>,
+    deferred_call_ids: Vec<DeferredCallId>,
     diagnostics: Vec<Diagnostic>,
     content_hash: u64,
 }
-assert_mem_size!(Document, 184);
+assert_mem_size!(Document, 208);
 
 impl Document {
     #[must_use]
@@ -31,6 +32,7 @@ impl Document {
             definition_ids: Vec::new(),
             method_reference_ids: Vec::new(),
             constant_reference_ids: Vec::new(),
+            deferred_call_ids: Vec::new(),
             diagnostics: Vec::new(),
             content_hash: xxh3_64(source.as_bytes()),
         }
@@ -81,6 +83,15 @@ impl Document {
 
     pub fn add_constant_reference(&mut self, reference_id: ConstantReferenceId) {
         self.constant_reference_ids.push(reference_id);
+    }
+
+    #[must_use]
+    pub fn deferred_calls(&self) -> &[DeferredCallId] {
+        &self.deferred_call_ids
+    }
+
+    pub fn add_deferred_call(&mut self, deferred_call_id: DeferredCallId) {
+        self.deferred_call_ids.push(deferred_call_id);
     }
 
     #[must_use]

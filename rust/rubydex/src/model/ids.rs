@@ -77,6 +77,17 @@ pub struct NameMarker;
 pub type NameId = Id<NameMarker>;
 assert_mem_size!(NameId, 8);
 
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub struct DeferredCallMarker;
+/// `DeferredCallId` identifies a resolution-dependent call at a stable source location.
+pub type DeferredCallId = Id<DeferredCallMarker>;
+assert_mem_size!(DeferredCallId, 8);
+
+#[must_use]
+pub fn deferred_call_id(uri_id: UriId, offset: &Offset) -> DeferredCallId {
+    id_from_parts!(DeferredCallId; uri_id.get(), offset.start())
+}
+
 // Reference IDs
 //
 // This section is for specialized IDs for each type of declaration reference

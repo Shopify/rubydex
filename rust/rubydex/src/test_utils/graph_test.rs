@@ -133,6 +133,11 @@ impl GraphTest {
                 .constant_references()
                 .get(id)
                 .and_then(|r| self.name_str(r.name_id())),
+            NameDependent::DeferredCall(id) => self
+                .graph()
+                .deferred_calls()
+                .get(id)
+                .and_then(|call| self.name_str(&call.receiver_name_id())),
         }
     }
 

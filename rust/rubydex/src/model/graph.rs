@@ -12,13 +12,15 @@ use crate::model::document::Document;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{
-    ConstantReferenceId, DeclarationId, DefinitionId, MethodReferenceId, NameId, StringId, UriId,
+    ConstantReferenceId, DeclarationId, DeferredCallId, DefinitionId, MethodReferenceId, NameId, StringId, UriId,
     declaration_id_from_lookup_name,
 };
 use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
 use crate::model::visibility::Visibility;
+use crate::operation::Operation;
+use crate::operation::deferred::{DeferredArgument, DeferredCall, DeferredCallResolution, DeferredCallResult};
 use crate::{assert_mem_size, assert_send_sync};
 use crate::{query, stats};
 
@@ -32,6 +34,8 @@ pub enum NameDependent {
     ChildName(NameId),
     /// This name's `nesting` is the key name — reference-only dependency.
     NestedName(NameId),
+    /// A deferred call whose compiler selection depends on this resolved name.
+    DeferredCall(DeferredCallId),
 }
 assert_mem_size!(NameDependent, 16);
 
@@ -55,6 +59,8 @@ pub enum Unit {
     ConstantRef(ConstantReferenceId),
     /// A declaration whose ancestors need re-linearization
     Ancestors(DeclarationId),
+    /// A resolution-dependent call that needs semantic matching.
+    DeferredCall(DeferredCallId),
 }
 assert_mem_size!(Unit, 16);
 
@@ -77,6 +83,9 @@ pub struct Graph {
     constant_references: IdentityHashMap<ConstantReferenceId, ConstantReference>,
     // Map of method references that still need to be resolved
     method_references: IdentityHashMap<MethodReferenceId, MethodRef>,
+    // Resolution-dependent source calls and their non-authoritative prototype results
+    deferred_calls: IdentityHashMap<DeferredCallId, DeferredCall>,
+    deferred_call_results: IdentityHashMap<DeferredCallId, DeferredCallResult>,
 
     /// The position encoding used for LSP line/column locations. Not related to the actual encoding of the file
     position_encoding: Encoding,
@@ -92,7 +101,7 @@ pub struct Graph {
     /// Project configuration
     config: Config,
 }
-assert_mem_size!(Graph, 368);
+assert_mem_size!(Graph, 432);
 assert_send_sync!(Graph);
 
 impl Graph {
@@ -106,6 +115,8 @@ impl Graph {
             names: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
+            deferred_calls: IdentityHashMap::default(),
+            deferred_call_results: IdentityHashMap::default(),
             position_encoding: Encoding::default(),
             name_dependents: IdentityHashMap::default(),
             pending_work: Vec::default(),
@@ -636,6 +647,88 @@ impl Graph {
     }
 
     #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn deferred_calls(&self) -> &IdentityHashMap<DeferredCallId, DeferredCall> {
+        &self.deferred_calls
+    }
+
+    #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn deferred_call_resolution(&self, id: DeferredCallId) -> Option<DeferredCallResolution> {
+        self.deferred_call_results.get(&id).map(DeferredCallResult::resolution)
+    }
+
+    #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn deferred_call_expansion(&self, id: DeferredCallId) -> Option<&[Operation]> {
+        self.deferred_call_results.get(&id).map(DeferredCallResult::expansion)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn take_deferred_call_expansion(&mut self, id: DeferredCallId) -> Option<Box<[Operation]>> {
+        self.deferred_call_results
+            .get_mut(&id)
+            .map(DeferredCallResult::take_expansion)
+    }
+
+    /// Records a deferred-call result and exact alias-path `NameId` dependencies.
+    ///
+    /// `alias_path_deps` are the target names traversed while normalizing the receiver
+    /// (not every name that happens to resolve to the terminal owner).
+    pub(crate) fn record_deferred_call_result(
+        &mut self,
+        id: DeferredCallId,
+        resolution: DeferredCallResolution,
+        expansion: Box<[Operation]>,
+        alias_path_deps: &[NameId],
+    ) {
+        self.clear_deferred_call_dependencies(id);
+
+        let receiver_name_id = self.deferred_calls.get(&id).map(DeferredCall::receiver_name_id);
+        let mut dependency_names = Vec::new();
+        for &name_id in alias_path_deps {
+            if receiver_name_id == Some(name_id) || dependency_names.contains(&name_id) {
+                continue;
+            }
+            let deps = self.name_dependents.entry(name_id).or_default();
+            let dependent = NameDependent::DeferredCall(id);
+            if !deps.contains(&dependent) {
+                deps.push(dependent);
+            }
+            dependency_names.push(name_id);
+        }
+
+        self.deferred_call_results.insert(
+            id,
+            DeferredCallResult::new(resolution, expansion, dependency_names.into_boxed_slice()),
+        );
+    }
+
+    fn clear_deferred_call_dependencies(&mut self, id: DeferredCallId) {
+        let Some(dependency_names) = self
+            .deferred_call_results
+            .get(&id)
+            .map(|result| result.dependency_names().to_vec())
+        else {
+            return;
+        };
+        for name_id in dependency_names {
+            self.remove_name_dependent(name_id, NameDependent::DeferredCall(id));
+        }
+    }
+
+    fn invalidate_deferred_call(&mut self, id: DeferredCallId) {
+        if self.deferred_calls.contains_key(&id) {
+            self.clear_deferred_call_dependencies(id);
+            self.deferred_call_results.insert(
+                id,
+                DeferredCallResult::new(DeferredCallResolution::Pending, Box::default(), Box::default()),
+            );
+            self.push_work(Unit::DeferredCall(id));
+        }
+    }
+
+    #[must_use]
     pub fn name_dependents(&self) -> &IdentityHashMap<NameId, Vec<NameDependent>> {
         &self.name_dependents
     }
@@ -941,8 +1034,17 @@ impl Graph {
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
     /// different threads, but not meant to handle updates to the existing global representation
     pub fn extend(&mut self, local_graph: LocalGraph) {
-        let (uri_id, document, definitions, strings, names, constant_references, method_references, name_dependents) =
-            local_graph.into_parts();
+        let (
+            uri_id,
+            document,
+            definitions,
+            strings,
+            names,
+            constant_references,
+            method_references,
+            deferred_calls,
+            name_dependents,
+        ) = local_graph.into_parts();
 
         if self.documents.insert(uri_id, document).is_some() {
             debug_assert!(false, "UriId collision in global graph");
@@ -991,6 +1093,17 @@ impl Graph {
         for (method_ref_id, method_ref) in method_references {
             if self.method_references.insert(method_ref_id, method_ref).is_some() {
                 debug_assert!(false, "Method ReferenceId collision in global graph");
+            }
+        }
+
+        for (deferred_call_id, deferred_call) in deferred_calls {
+            self.push_work(Unit::DeferredCall(deferred_call_id));
+            self.deferred_call_results.insert(
+                deferred_call_id,
+                DeferredCallResult::new(DeferredCallResolution::Pending, Box::default(), Box::default()),
+            );
+            if self.deferred_calls.insert(deferred_call_id, deferred_call).is_some() {
+                debug_assert!(false, "DeferredCallId collision in global graph");
             }
         }
 
@@ -1096,6 +1209,23 @@ impl Graph {
     /// Removes raw document data (refs, defs, names, strings) from maps.
     /// Does not touch declarations or perform invalidation -- that is handled by `invalidate`.
     fn remove_document_data(&mut self, document: &Document) {
+        for call_id in document.deferred_calls() {
+            if let Some(call) = self.deferred_calls.remove(call_id) {
+                self.remove_name_dependent(call.receiver_name_id(), NameDependent::DeferredCall(*call_id));
+                self.clear_deferred_call_dependencies(*call_id);
+                self.deferred_call_results.remove(call_id);
+
+                // The shadow DeferredCall borrows the assignment NameId owned by the
+                // ordinary DefineConstant. Its literal arguments are the only interned
+                // resources owned exclusively by the deferred-call lifecycle.
+                for argument in call.arguments() {
+                    if let DeferredArgument::LiteralName(str_id) = argument {
+                        self.untrack_string(*str_id);
+                    }
+                }
+            }
+        }
+
         for ref_id in document.method_references() {
             if let Some(method_ref) = self.method_references.remove(ref_id) {
                 self.untrack_string(*method_ref.str());
@@ -1177,6 +1307,21 @@ impl Graph {
         }
     }
 
+    fn invalidate_deferred_calls_for_names(&mut self, name_ids: &IdentityHashSet<NameId>) {
+        let deferred_calls: IdentityHashSet<DeferredCallId> = name_ids
+            .iter()
+            .filter_map(|name_id| self.name_dependents.get(name_id))
+            .flatten()
+            .filter_map(|dependent| match dependent {
+                NameDependent::DeferredCall(call_id) => Some(*call_id),
+                _ => None,
+            })
+            .collect();
+        for call_id in deferred_calls {
+            self.invalidate_deferred_call(call_id);
+        }
+    }
+
     /// Processes a declaration in the invalidation worklist.
     ///
     /// Detaches any pending definitions first, then either:
@@ -1241,9 +1386,18 @@ impl Graph {
                 self.queue_structural_cascade(name_id, queue);
 
                 if let Some(deps) = self.name_dependents.get(&name_id) {
+                    let deps = deps.clone();
                     for dep in deps {
-                        if let NameDependent::Reference(ref_id) = dep {
-                            self.pending_work.push(Unit::ConstantRef(*ref_id));
+                        match dep {
+                            NameDependent::Reference(ref_id) => {
+                                self.pending_work.push(Unit::ConstantRef(ref_id));
+                            }
+                            NameDependent::DeferredCall(call_id) => {
+                                self.invalidate_deferred_call(call_id);
+                            }
+                            NameDependent::Definition(_)
+                            | NameDependent::ChildName(_)
+                            | NameDependent::NestedName(_) => {}
                         }
                     }
                 }
@@ -1293,6 +1447,8 @@ impl Graph {
             if !visited_declarations.insert(decl_id) {
                 return;
             }
+
+            self.invalidate_deferred_calls_for_names(&seed_names);
 
             let Some(namespace) = self.declarations.get_mut(&decl_id).and_then(|d| d.as_namespace_mut()) else {
                 return;
@@ -1355,6 +1511,9 @@ impl Graph {
                             queue.push(InvalidationItem::Declaration(old_decl_id));
                         }
                     }
+                    NameDependent::DeferredCall(call_id) => {
+                        self.invalidate_deferred_call(*call_id);
+                    }
                     NameDependent::ChildName(_) | NameDependent::NestedName(_) => {}
                 }
             }
@@ -1370,11 +1529,15 @@ impl Graph {
         let is_resolved = matches!(self.names.get(&name_id), Some(NameRef::Resolved(_)));
 
         for dep in &dependents {
-            if let NameDependent::Reference(ref_id) = dep {
-                if is_resolved {
-                    self.unresolve_reference(*ref_id);
+            match dep {
+                NameDependent::Reference(ref_id) => {
+                    if is_resolved {
+                        self.unresolve_reference(*ref_id);
+                    }
+                    self.push_work(Unit::ConstantRef(*ref_id));
                 }
-                self.push_work(Unit::ConstantRef(*ref_id));
+                NameDependent::DeferredCall(call_id) => self.invalidate_deferred_call(*call_id),
+                NameDependent::Definition(_) | NameDependent::ChildName(_) | NameDependent::NestedName(_) => {}
             }
         }
     }
@@ -1388,7 +1551,7 @@ impl Graph {
                     NameDependent::ChildName(id) | NameDependent::NestedName(id) => {
                         queue.push(InvalidationItem::Name(*id));
                     }
-                    NameDependent::Reference(_) | NameDependent::Definition(_) => {}
+                    NameDependent::Reference(_) | NameDependent::Definition(_) | NameDependent::DeferredCall(_) => {}
                 }
             }
         }
@@ -1406,7 +1569,7 @@ impl Graph {
                     NameDependent::NestedName(id) => {
                         queue.push(InvalidationItem::References(*id));
                     }
-                    NameDependent::Reference(_) | NameDependent::Definition(_) => {}
+                    NameDependent::Reference(_) | NameDependent::Definition(_) | NameDependent::DeferredCall(_) => {}
                 }
             }
         }
@@ -1451,7 +1614,43 @@ impl Graph {
         &self.position_encoding
     }
 
+    fn deferred_call_stats(&self) -> (usize, usize, usize, usize, usize, usize) {
+        let matched = self
+            .deferred_call_results
+            .values()
+            .filter(|result| matches!(result.resolution(), DeferredCallResolution::Compiler(_)))
+            .count();
+        let fallback = self
+            .deferred_call_results
+            .values()
+            .filter(|result| result.resolution() == DeferredCallResolution::Fallback)
+            .count();
+        let pending = self.deferred_calls.len() - matched - fallback;
+        let mut dep_edges = 0usize;
+        let mut max_deps = 0usize;
+        for (call_id, call) in &self.deferred_calls {
+            // Receiver edge plus exact alias-path owners recorded on the result.
+            let mut edges = 1usize;
+            if let Some(result) = self.deferred_call_results.get(call_id) {
+                edges += result.dependency_names().len();
+            } else {
+                let _ = call;
+            }
+            dep_edges += edges;
+            max_deps = max_deps.max(edges);
+        }
+        (
+            matched,
+            fallback,
+            pending,
+            dep_edges,
+            max_deps,
+            self.deferred_calls.len(),
+        )
+    }
+
     #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
     pub fn print_query_statistics(&self) {
         use std::collections::{HashMap, HashSet};
 
@@ -1502,6 +1701,24 @@ impl Graph {
         println!("Query statistics");
         let total_declarations = self.declarations.len();
         println!("  Total declarations:         {total_declarations}");
+        // Prototype-only deferred-call instrumentation (not a supported Graph API).
+        if !self.deferred_calls.is_empty() {
+            let (matched_deferred_calls, fallback_deferred_calls, pending_deferred_calls, dep_edges, max_deps, total) =
+                self.deferred_call_stats();
+            let avg_deps = if total == 0 {
+                0.0
+            } else {
+                dep_edges as f64 / total as f64
+            };
+            println!("  Deferred calls (prototype): {total}");
+            println!("    Matched:                  {matched_deferred_calls}");
+            println!("    Fallback:                 {fallback_deferred_calls}");
+            println!("    Pending:                  {pending_deferred_calls}");
+            println!("    Dependency edges:         {dep_edges}");
+            println!("    Avg deps/call:            {avg_deps:.2}");
+            println!("    Max deps/call:            {max_deps}");
+        }
+        println!("  Pending resolution work:    {}", self.pending_work.len());
         println!(
             "  With documentation:         {} ({:.1}%)",
             declarations_with_docs,

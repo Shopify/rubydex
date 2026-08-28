@@ -8,13 +8,18 @@ use crate::model::{
         Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
         Namespace, SingletonClassDeclaration, TodoDeclaration,
     },
-    definitions::{Definition, Mixin, Receiver},
+    definitions::{Definition, DefinitionFlags, Mixin, Receiver},
     graph::{Graph, Unit},
     identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet},
-    ids::{ConstantReferenceId, DeclarationId, DefinitionId, NameId, StringId, UriId},
+    ids::{
+        ConstantReferenceId, DeclarationId, DeferredCallId, DefinitionId, NameId, StringId, UriId,
+        declaration_id_from_lookup_name,
+    },
     name::{Name, NameRef, ParentScope},
     visibility::Visibility,
 };
+use crate::operation::deferred::{CompilerKind, DeferredArgument, DeferredCallResolution};
+use crate::operation::{self as op, AttrKind, Operation};
 
 enum Outcome {
     /// The constant was successfully resolved to the given declaration ID.
@@ -148,6 +153,9 @@ impl<'a> Resolver<'a> {
                     }
                     Unit::Ancestors(id) => {
                         self.handle_ancestor_unit(id);
+                    }
+                    Unit::DeferredCall(id) => {
+                        self.handle_deferred_call(unit_id, id);
                     }
                 }
             }
@@ -298,6 +306,165 @@ impl<'a> Resolver<'a> {
                 self.graph.push_work(unit_id);
             }
         }
+    }
+
+    fn handle_deferred_call(&mut self, unit_id: Unit, id: DeferredCallId) {
+        let Some(call) = self.graph.deferred_calls().get(&id) else {
+            return;
+        };
+        let receiver_name_id = call.receiver_name_id();
+        let method_name = call.method_name();
+        let arguments_supported = call
+            .arguments()
+            .iter()
+            .all(|argument| matches!(argument, DeferredArgument::LiteralName(_)));
+
+        let owner_id = match self.resolve_constant_internal(receiver_name_id) {
+            Outcome::Resolved(owner_id) => owner_id,
+            Outcome::Retry { .. } => {
+                self.unit_queue.push_back(unit_id);
+                return;
+            }
+            Outcome::Unresolved => {
+                // Mirror ConstantRef: park for a later incremental resolve rather than
+                // spinning inside the current fixed-point pass.
+                self.graph.push_work(unit_id);
+                return;
+            }
+        };
+
+        let (normalized_owners, alias_path_deps) = self.resolve_alias_chain_with_dependencies(owner_id);
+        if normalized_owners.iter().any(|owner_id| {
+            matches!(
+                self.graph.declarations().get(owner_id),
+                Some(Declaration::ConstantAlias(_))
+            )
+        }) {
+            self.unit_queue.push_back(unit_id);
+            return;
+        }
+
+        let compiler = if arguments_supported && normalized_owners.len() == 1 {
+            self.match_builtin_compiler(normalized_owners[0], method_name)
+        } else {
+            None
+        };
+
+        let (resolution, expansion) = match compiler {
+            Some(compiler) => (
+                DeferredCallResolution::Compiler(compiler),
+                // Expansion is inspection-only; ordinary DefineConstant remains authoritative.
+                self.expand_deferred_call(id, compiler),
+            ),
+            None => (DeferredCallResolution::Fallback, Box::default()),
+        };
+        self.graph
+            .record_deferred_call_result(id, resolution, expansion, &alias_path_deps);
+        self.made_progress = true;
+    }
+
+    fn match_builtin_compiler(&self, owner_id: DeclarationId, method_name: StringId) -> Option<CompilerKind> {
+        let new_method = StringId::from("new");
+        if owner_id != declaration_id_from_lookup_name("Struct") || method_name != new_method {
+            return None;
+        }
+        // Identity alone is not enough: only a class namespace is a Struct compiler owner.
+        match self.graph.declarations().get(&owner_id) {
+            Some(Declaration::Namespace(Namespace::Class(_))) => Some(CompilerKind::StructNew),
+            _ => None,
+        }
+    }
+
+    fn expand_deferred_call(&self, id: DeferredCallId, compiler: CompilerKind) -> Box<[Operation]> {
+        let call = self.graph.deferred_calls().get(&id).unwrap();
+        // Semantic match may normalize Alias → Struct, but generated IR must keep the source
+        // receiver NameId so the live ReferenceConstant(Alias) satisfies OperationApplier.
+        let superclass_name = call.receiver_name_id();
+        match compiler {
+            CompilerKind::StructNew => {
+                // Delta IR relative to already-emitted indexing refs: EnterClass + attrs +
+                // ExitScope. ReferenceConstant/ReferenceMethod for the call site remain in
+                // the live CompiledItem stream.
+                let mut operations = Vec::with_capacity(call.arguments().len() + 2);
+                operations.push(Operation::EnterClass(op::EnterClass {
+                    name_id: call.assignment().name_id(),
+                    uri_id: call.uri_id(),
+                    offset: call.assignment().offset().clone(),
+                    name_offset: call.assignment().name_offset().clone(),
+                    comments: Box::default(),
+                    flags: call.assignment().flags(),
+                    superclass_name: Some(superclass_name),
+                    is_lexical_scope: false,
+                }));
+                for argument in call.arguments() {
+                    if let DeferredArgument::LiteralName(str_id) = argument {
+                        operations.push(Operation::DefineAttribute(op::DefineAttribute {
+                            kind: AttrKind::Accessor,
+                            str_id: *str_id,
+                            uri_id: call.uri_id(),
+                            offset: call.offset().clone(),
+                            comments: Box::default(),
+                            flags: DefinitionFlags::empty(),
+                        }));
+                    }
+                }
+                operations.push(Operation::ExitScope);
+                operations.into_boxed_slice()
+            }
+        }
+    }
+
+    /// Like `resolve_alias_chains`, but also returns the exact target `NameId`s traversed.
+    fn resolve_alias_chain_with_dependencies(
+        &self,
+        declaration_id: DeclarationId,
+    ) -> (Vec<DeclarationId>, Vec<NameId>) {
+        let mut results = Vec::new();
+        let mut dependencies = Vec::new();
+        let mut queue = VecDeque::from([declaration_id]);
+        let mut seen = HashSet::new();
+
+        while let Some(current) = queue.pop_front() {
+            if !seen.insert(current) {
+                continue;
+            }
+
+            match self.graph.declarations().get(&current) {
+                Some(Declaration::ConstantAlias(_)) => {
+                    let mut targets = Vec::new();
+                    for definition_id in self.graph.declarations().get(&current).unwrap().definitions() {
+                        let Some(Definition::ConstantAlias(alias_def)) = self.graph.definitions().get(definition_id)
+                        else {
+                            continue;
+                        };
+                        let target_name_id = *alias_def.target_name_id();
+                        if !dependencies.contains(&target_name_id) {
+                            dependencies.push(target_name_id);
+                        }
+                        if let Some(NameRef::Resolved(resolved)) = self.graph.names().get(&target_name_id) {
+                            let target_id = *resolved.declaration_id();
+                            if !targets.contains(&target_id) {
+                                targets.push(target_id);
+                            }
+                        }
+                    }
+                    if targets.is_empty() {
+                        // Target not resolved yet — keep the alias for retry.
+                        results.push(current);
+                    } else {
+                        queue.extend(targets);
+                    }
+                }
+                Some(_) => {
+                    results.push(current);
+                }
+                None => {
+                    panic!("Declaration {current:?} not found in graph");
+                }
+            }
+        }
+
+        (results, dependencies)
     }
 
     /// Handles a unit of work for linearizing ancestors of a declaration
@@ -1859,6 +2026,7 @@ impl<'a> Resolver<'a> {
     /// In this case `Bar` must already be processed so the `Bar` reference inside `Foo` resolves, which then unblocks
     /// `Baz` and finally `Qux`. Notice how `Qux` is a simple name nested under a complex one, so it too sorts late —
     /// which is why depth accounts for the parent scopes across the entire nesting, not just for the name itself.
+    #[allow(clippy::too_many_lines)]
     fn prepare_units(&mut self) -> Vec<DefinitionId> {
         let work = self.graph.take_pending_work();
         let estimated = work.len() / 2;
@@ -1866,6 +2034,7 @@ impl<'a> Resolver<'a> {
         let mut others = Vec::with_capacity(estimated);
         let mut singleton_methods = Vec::new();
         let mut const_refs = Vec::new();
+        let mut deferred_calls = Vec::new();
         let mut ancestors = vec![*BASIC_OBJECT_ID, *KERNEL_ID, *OBJECT_ID, *MODULE_ID, *CLASS_ID];
         let names = self.graph.names();
         // Every name captured its depth during indexing (see `Name::compute_depth`), so ordering the units below is a
@@ -1892,6 +2061,7 @@ impl<'a> Resolver<'a> {
         // and the same definition/reference ID can be enqueued more than once.
         let mut seen_defs = IdentityHashSet::<DefinitionId>::default();
         let mut seen_references = IdentityHashSet::<ConstantReferenceId>::default();
+        let mut seen_deferred_calls = IdentityHashSet::<DeferredCallId>::default();
         let mut seen_ancestors = IdentityHashSet::<DeclarationId>::default();
 
         for unit in work {
@@ -1959,6 +2129,17 @@ impl<'a> Resolver<'a> {
                         ancestors.push(id);
                     }
                 }
+                Unit::DeferredCall(id) => {
+                    if !seen_deferred_calls.insert(id) {
+                        continue;
+                    }
+                    let Some(call) = self.graph.deferred_calls().get(&id) else {
+                        continue;
+                    };
+                    let uri_rank = *uri_ranks.get(&call.uri_id()).unwrap();
+                    let depth = depth_of(&call.receiver_name_id());
+                    deferred_calls.push((Unit::DeferredCall(id), (depth, uri_rank, call.offset())));
+                }
             }
         }
 
@@ -1967,12 +2148,14 @@ impl<'a> Resolver<'a> {
         definitions.sort_unstable_by_key(|(_, key)| *key);
 
         const_refs.sort_unstable_by_key(|(_, key)| *key);
+        deferred_calls.sort_unstable_by_key(|(_, key)| *key);
 
         others.sort_unstable_by_key(|(_, key)| *key);
 
-        // Definitions first, then constant refs, then singleton methods, then ancestors
+        // Definitions first, then constant refs and deferred calls, then singleton methods and ancestors.
         self.unit_queue.extend(definitions.into_iter().map(|(id, _)| id));
         self.unit_queue.extend(const_refs.into_iter().map(|(id, _)| id));
+        self.unit_queue.extend(deferred_calls.into_iter().map(|(id, _)| id));
         self.unit_queue.extend(singleton_methods);
         self.unit_queue.extend(ancestors.into_iter().map(Unit::Ancestors));
 

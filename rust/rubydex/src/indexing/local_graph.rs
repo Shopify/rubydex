@@ -5,11 +5,14 @@ use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::graph::NameDependent;
 use crate::model::identity_maps::IdentityHashMap;
-use crate::model::ids::{ConstantReferenceId, DefinitionId, MethodReferenceId, NameId, StringId, UriId};
+use crate::model::ids::{
+    ConstantReferenceId, DeferredCallId, DefinitionId, MethodReferenceId, NameId, StringId, UriId,
+};
 use crate::model::name::{Name, NameRef, ParentScope};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
 use crate::offset::Offset;
+use crate::operation::deferred::DeferredCall;
 
 type LocalGraphParts = (
     UriId,
@@ -19,6 +22,7 @@ type LocalGraphParts = (
     IdentityHashMap<NameId, NameRef>,
     IdentityHashMap<ConstantReferenceId, ConstantReference>,
     IdentityHashMap<MethodReferenceId, MethodRef>,
+    IdentityHashMap<DeferredCallId, DeferredCall>,
     IdentityHashMap<NameId, Vec<NameDependent>>,
 );
 
@@ -31,6 +35,7 @@ pub struct LocalGraph {
     names: IdentityHashMap<NameId, NameRef>,
     constant_references: IdentityHashMap<ConstantReferenceId, ConstantReference>,
     method_references: IdentityHashMap<MethodReferenceId, MethodRef>,
+    deferred_calls: IdentityHashMap<DeferredCallId, DeferredCall>,
     name_dependents: IdentityHashMap<NameId, Vec<NameDependent>>,
 }
 
@@ -45,6 +50,7 @@ impl LocalGraph {
             names: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
+            deferred_calls: IdentityHashMap::default(),
             name_dependents: IdentityHashMap::default(),
         }
     }
@@ -188,6 +194,25 @@ impl LocalGraph {
         reference_id
     }
 
+    // Deferred calls
+
+    #[must_use]
+    pub fn deferred_calls(&self) -> &IdentityHashMap<DeferredCallId, DeferredCall> {
+        &self.deferred_calls
+    }
+
+    pub fn add_deferred_call(&mut self, call: DeferredCall) {
+        let call_id = call.id();
+        self.name_dependents
+            .entry(call.receiver_name_id())
+            .or_default()
+            .push(NameDependent::DeferredCall(call_id));
+        if self.deferred_calls.insert(call_id, call).is_some() {
+            debug_assert!(false, "DeferredCallId collision in local graph");
+        }
+        self.document.add_deferred_call(call_id);
+    }
+
     // Diagnostics
 
     #[must_use]
@@ -241,6 +266,7 @@ impl LocalGraph {
             names,
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
+            deferred_calls: IdentityHashMap::default(),
             name_dependents,
         }
     }
@@ -257,6 +283,7 @@ impl LocalGraph {
             self.names,
             self.constant_references,
             self.method_references,
+            self.deferred_calls,
             self.name_dependents,
         )
     }

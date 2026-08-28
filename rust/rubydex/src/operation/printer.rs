@@ -7,11 +7,12 @@ use crate::model::{
     string_ref::StringRef,
     visibility::Visibility,
 };
+use crate::operation::deferred::{DeferredArgument, DeferredCall};
 use crate::operation::{
-    AliasConstant, AliasGlobalVariable, AliasMethod, AttrKind, DefineAttribute, DefineClassVariable, DefineConstant,
-    DefineGlobalVariable, DefineInstanceVariable, EnterClass, EnterMethod, EnterModule, EnterSingletonClass, Mixin,
-    MixinKind, Operation, ReferenceConstant, ReferenceMethod, SetConstantVisibility, SetDefaultVisibility,
-    SetMethodVisibility, Target,
+    AliasConstant, AliasGlobalVariable, AliasMethod, AttrKind, CompiledItem, DefineAttribute, DefineClassVariable,
+    DefineConstant, DefineGlobalVariable, DefineInstanceVariable, EnterClass, EnterMethod, EnterModule,
+    EnterSingletonClass, Mixin, MixinKind, Operation, ReferenceConstant, ReferenceMethod, SetConstantVisibility,
+    SetDefaultVisibility, SetMethodVisibility, Target,
 };
 
 struct OperationPrinter<'a> {
@@ -92,6 +93,27 @@ impl OperationPrinter<'_> {
             Operation::ReferenceConstant(op) => self.print_reference_constant(op),
             Operation::ReferenceMethod(op) => self.print_reference_method(op),
         }
+    }
+
+    fn print_deferred_call(&mut self, call: &DeferredCall) {
+        let indent = self.indent();
+        let receiver = self.name_str(call.receiver_name_id());
+        let method = self.string_value(call.method_name());
+        let assignment = self.name_str(call.assignment().name_id());
+        let arguments = call
+            .arguments()
+            .iter()
+            .map(|argument| match argument {
+                DeferredArgument::LiteralName(str_id) => self.string_value(*str_id),
+                DeferredArgument::Unsupported => "<unsupported>".to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            self.out,
+            "{indent}DeferredCall({assignment} = {receiver}.{method}({arguments}))"
+        )
+        .unwrap();
     }
 
     fn print_enter_class(&mut self, op: &EnterClass) {
@@ -254,6 +276,32 @@ pub fn print_operations(
 
     for op in operations {
         printer.print_operation(op);
+    }
+
+    printer.out.trim_end().to_string()
+}
+
+#[must_use]
+#[allow(clippy::implicit_hasher)]
+pub fn print_compiled_items(
+    items: &[CompiledItem],
+    strings: &IdentityHashMap<StringId, StringRef>,
+    names: &IdentityHashMap<NameId, NameRef>,
+    include_references: bool,
+) -> String {
+    let mut printer = OperationPrinter {
+        strings,
+        names,
+        out: String::new(),
+        depth: 0,
+        include_references,
+    };
+
+    for item in items {
+        match item {
+            CompiledItem::Operation(operation) => printer.print_operation(operation),
+            CompiledItem::DeferredCall(call) => printer.print_deferred_call(call),
+        }
     }
 
     printer.out.trim_end().to_string()
