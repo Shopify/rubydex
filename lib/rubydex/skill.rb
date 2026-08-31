@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "yaml"
 require "rubydex/errors"
 
 module Rubydex
