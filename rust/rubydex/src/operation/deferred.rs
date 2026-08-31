@@ -931,6 +931,117 @@ mod tests {
         assert!(integrity::check_integrity(&graph).is_empty());
     }
 
+    /// Vinicius unified-resolution oracle: when the Struct.new expansion is substituted at its
+    /// original stream position, the generated Foo namespace participates in ordinary ancestor-based
+    /// constant resolution (`Bar < Foo` → `SOME_REF` → `Struct::SOME_REF`).
+    ///
+    /// This proves IR/semantic expressiveness of existing Operations under in-stream execution.
+    /// It does **not** claim production DeferredCall already applies expansions authoritatively.
+    #[test]
+    fn in_stream_expansion_affects_ordinary_constant_resolution() {
+        let uri = "file:///test.rb";
+        let source = r"
+            class Struct
+              SOME_REF = 1
+            end
+
+            Foo = Struct.new
+
+            class Bar < Foo
+              SOME_REF
+            end
+        ";
+        let mut observation_graph = Graph::new();
+        index(&mut observation_graph, uri, source);
+        let call_id = only_call_id(&observation_graph);
+        let assignment_name_id = observation_graph.deferred_calls()[&call_id].assignment().name_id();
+        resolve(&mut observation_graph);
+        assert_eq!(
+            observation_graph.deferred_call_resolution(call_id),
+            Some(DeferredCallResolution::Compiler(CompilerKind::StructNew))
+        );
+        let expansion = observation_graph.take_deferred_call_expansion(call_id).unwrap();
+
+        let graph = apply_expansion_in_stream(uri, source, call_id, assignment_name_id, expansion);
+        let struct_id = crate::model::ids::declaration_id_from_lookup_name("Struct");
+        let some_ref_id = crate::model::ids::declaration_id_from_lookup_name("Struct::SOME_REF");
+        let foo_id = crate::model::ids::declaration_id_from_lookup_name("Foo");
+        let bar_id = crate::model::ids::declaration_id_from_lookup_name("Bar");
+
+        assert!(
+            graph.declarations().contains_key(&some_ref_id),
+            "expected Struct::SOME_REF declaration"
+        );
+
+        let foo = graph
+            .declarations()
+            .get(&foo_id)
+            .expect("Foo declaration missing after in-stream expansion");
+        assert!(
+            matches!(
+                foo,
+                crate::model::declaration::Declaration::Namespace(crate::model::declaration::Namespace::Class(_))
+            ),
+            "Foo generation: expected Foo to be a class namespace"
+        );
+        let foo_namespace = foo.as_namespace().unwrap();
+        assert!(
+            foo_namespace.ancestors().iter().any(
+                |ancestor| matches!(ancestor, crate::model::declaration::Ancestor::Complete(id) if *id == struct_id)
+            ),
+            "Foo -> Struct: expected Struct in Foo's ancestor chain"
+        );
+
+        let bar = graph
+            .declarations()
+            .get(&bar_id)
+            .expect("Bar declaration missing")
+            .as_namespace()
+            .expect("Bar should be a namespace");
+        assert!(
+            bar.ancestors()
+                .iter()
+                .any(|ancestor| matches!(ancestor, crate::model::declaration::Ancestor::Complete(id) if *id == foo_id)),
+            "Bar -> Foo: expected Foo in Bar's ancestor chain"
+        );
+
+        let some_ref_str = StringId::from("SOME_REF");
+        let bar_some_ref_targets: Vec<_> = graph
+            .constant_references()
+            .values()
+            .filter_map(|reference| {
+                let name_ref = graph.names().get(reference.name_id())?;
+                if *name_ref.str() != some_ref_str {
+                    return None;
+                }
+                // The expression `SOME_REF` inside `class Bar` is nested under Bar's name.
+                let nesting = name_ref.nesting().as_ref()?;
+                let nesting_ref = graph.names().get(nesting)?;
+                let crate::model::name::NameRef::Resolved(nesting_resolved) = nesting_ref else {
+                    return None;
+                };
+                if *nesting_resolved.declaration_id() != bar_id {
+                    return None;
+                }
+                match name_ref {
+                    crate::model::name::NameRef::Resolved(resolved) => Some(*resolved.declaration_id()),
+                    crate::model::name::NameRef::Unresolved(_) => None,
+                }
+            })
+            .collect();
+        assert_eq!(
+            bar_some_ref_targets.as_slice(),
+            &[some_ref_id],
+            "Bar::SOME_REF -> Struct::SOME_REF: expected the SOME_REF reference inside Bar to resolve to Struct::SOME_REF, got {bar_some_ref_targets:?}"
+        );
+
+        let integrity_issues = integrity::check_integrity(&graph);
+        assert!(
+            integrity_issues.is_empty(),
+            "integrity: unexpected issues: {integrity_issues:?}"
+        );
+    }
+
     #[test]
     fn out_of_band_replay_supports_the_self_contained_nested_struct_expansion() {
         let uri = "file:///test.rb";
