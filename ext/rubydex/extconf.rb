@@ -23,12 +23,12 @@ release = ENV["RELEASE"] || !developing_rubydex
 root_dir = gem_dir.join("rust")
 target_dir = root_dir.join("target")
 target_dir = target_dir.join("x86_64-pc-windows-gnu") if Gem.win_platform?
-target_dir = target_dir.join(release ? "release" : "debug")
+target_dir = target_dir.join("$(RUST_PROFILE)")
 
 bindings_path = root_dir.join("rubydex-sys").join("rustbindings.h")
 
 cargo_args = ["--manifest-path #{root_dir.join("Cargo.toml")}"]
-cargo_args << "--release" if release
+cargo_args << "$(CARGO_PROFILE_FLAG)"
 
 if Gem.win_platform?
   cargo_args << "--target x86_64-pc-windows-gnu"
@@ -102,6 +102,8 @@ makefile = File.read("Makefile")
 
 new_makefile = makefile.gsub("$(OBJS): $(HDRS) $(ruby_headers)", <<~MAKEFILE.chomp)
   .PHONY: compile_rust
+  RUST_PROFILE = $(if $(strip $(RELEASE)),release,#{developing_rubydex ? "debug" : "release"})
+  CARGO_PROFILE_FLAG = $(if $(filter release,$(RUST_PROFILE)),--release)
   RUST_SRCS = #{File.expand_path("Cargo.toml", root_dir)} #{File.expand_path("Cargo.lock", root_dir)} #{rust_srcs.join(" ")}
 
   .rust_built: $(RUST_SRCS)
