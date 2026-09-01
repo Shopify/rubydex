@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    rubydex (0.4.0)
+    rubydex (0.4.1)
 
 GEM
   remote: https://rubygems.org/
