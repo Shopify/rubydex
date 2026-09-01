@@ -35,7 +35,7 @@ module Rubydex
           require "rubydex/linter"
 
           custom_rules = load_linter_rules(workspace_path)
-          warn_unknown_rules(custom_rules)
+          warn_unknown_rules
 
           graph = build_graph($stderr, workspace_path:, config:)
           runner = Rubydex::Linter::Runner.new(graph, custom_rules:, config: linter_config)
@@ -64,9 +64,15 @@ module Rubydex
           @linter_config ||= config.linter #: Rubydex::LinterConfig?
         end
 
-        #: (Array[singleton(Rubydex::Linter::CustomRule)] custom_rule_classes) -> void
-        def warn_unknown_rules(custom_rule_classes)
-          known_rule_names = (Rubydex::Rules::ALL + custom_rule_classes).map(&:rule_name).uniq.sort
+        #: () -> void
+        def warn_unknown_rules
+          known_rule_names = (Rule.subclasses + Rubydex::Linter::CustomRule.subclasses).filter_map do |rule|
+            name = rule.rule_name
+            name unless name == "CustomRule"
+          end
+          known_rule_names.uniq!
+          known_rule_names.sort!
+
           unknown_rule_names = linter_config.rules.keys.reject { |name| known_rule_names.include?(name) }.sort
           return if unknown_rule_names.empty?
 

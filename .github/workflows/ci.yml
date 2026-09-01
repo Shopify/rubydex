@@ -30,6 +30,15 @@ jobs:
       - name: Compile
         run: bundle exec rake compile
 
+      - name: Check generated rules are up to date
+        run: |
+          changes=$(git status --porcelain lib/rubydex/rules)
+          if [ -n "$changes" ]; then
+            echo "$changes"
+            echo "Generated rule classes are stale. Run \`bundle exec rake generate_rules\` and commit the result."
+            exit 1
+          fi
+
       - name: Run Rubydex linter
         run: bundle exec rdx lint
 

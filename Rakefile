@@ -53,6 +53,13 @@ end
 # Enhance the clean task to also clean Rust artifacts
 Rake::Task[:clean].enhance([:clean_rust])
 
+desc "Generate the Ruby classes for the graph's built-in rules"
+task :generate_rules do
+  sh "cargo run --quiet --bin generate_ruby_rules", chdir: "rust"
+end
+
+Rake::Task[:compile].enhance([:generate_rules])
+
 task compile_release: :clean do
   ENV["RELEASE"] = "true"
   Rake::Task[:compile].invoke
