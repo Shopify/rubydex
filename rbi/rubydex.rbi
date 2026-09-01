@@ -535,58 +535,6 @@ class Rubydex::Linter::Rules::RuleStructure < Rubydex::Linter::CustomRule
   def lint; end
 end
 
-class Rubydex::Linter::RuleTestCase < Minitest::Test
-  DEFAULT_FILE = T.let(T.unsafe(nil), String)
-  ANNOTATION_PATTERN = T.let(T.unsafe(nil), Regexp)
-
-  sig { returns(String) }
-  def workspace_path; end
-
-  sig { params(name: String).void }
-  def initialize(name); end
-
-  sig { void }
-  def teardown; end
-
-  sig { returns(T.class_of(Rubydex::Linter::CustomRule)) }
-  def rule_class; end
-
-  sig { params(sources: T::Hash[String, String]).void }
-  def add_shared_source(sources); end
-
-  sig { returns(T::Array[String]) }
-  def ignored_diagnostic_files; end
-
-  sig { returns(Rubydex::LinterConfig) }
-  def rule_config; end
-
-  sig do
-    params(
-      args: T.any(String, T::Hash[T.any(String, Symbol), String]),
-      rule_builder: T.nilable(T.proc.params(graph: Rubydex::Graph).returns(Rubydex::Linter::CustomRule)),
-    ).returns(T::Array[Rubydex::Diagnostic])
-  end
-  def assert_diagnostics(*args, &rule_builder); end
-
-  sig do
-    params(
-      args: T.any(String, T::Hash[T.any(String, Symbol), String]),
-      rule_builder: T.nilable(T.proc.params(graph: Rubydex::Graph).returns(Rubydex::Linter::CustomRule)),
-    ).returns(T::Array[Rubydex::Diagnostic])
-  end
-  def assert_no_diagnostics(*args, &rule_builder); end
-
-  sig do
-    params(
-      dependency: String,
-      args: T.any(String, T::Hash[T.any(String, Symbol), String]),
-      after_excluding: T::Array[String],
-      rule_builder: T.nilable(T.proc.params(graph: Rubydex::Graph).returns(Rubydex::Linter::CustomRule)),
-    ).void
-  end
-  def assert_handles_missing_required_dependency(dependency, *args, after_excluding: [], &rule_builder); end
-end
-
 class Rubydex::Linter::Runner
   sig do
     params(
