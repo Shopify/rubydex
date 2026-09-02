@@ -58,7 +58,7 @@ task :generate_rules do
   sh "cargo run --quiet --bin generate_ruby_rules", chdir: "rust"
 end
 
-Rake::Task[:compile].enhance([:generate_rules])
+task compile: :generate_rules
 
 task compile_release: :clean do
   ENV["RELEASE"] = "true"
