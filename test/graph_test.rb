@@ -893,6 +893,40 @@ class GraphTest < Minitest::Test
     end
   end
 
+  # A gem taken from a `git` or `path` source is never registered with RubyGems, so
+  # `Gem::Specification.find_by_name` raises for it. Bundler keeps an index per source that knows
+  # where the checkout lives and which directories the gemspec declares.
+  def test_dependency_paths_come_from_the_bundler_source_when_rubygems_does_not_know_the_gem
+    spec = FakeSpec.new("gizmo", "/checkout/gizmo", ["src/ruby/lib", "src/ruby/pb"])
+    lazy_spec = FakeLazySpec.new("gizmo", FakeSource.new(FakeIndex.new(spec)))
+
+    found = Rubydex::Graph.new.send(:resolve_dependency_spec, lazy_spec, {})
+
+    assert_equal(spec, found)
+    # Every directory the gemspec declares counts, not just `lib`.
+    assert_equal(["src/ruby/lib", "src/ruby/pb"], found.require_paths)
+  end
+
+  # A source that is not checked out yet must leave its gems unindexed rather than fail the whole
+  # workspace.
+  def test_dependency_paths_tolerate_a_source_that_cannot_be_indexed
+    lazy_spec = FakeLazySpec.new("gizmo", FailingSource.new)
+
+    assert_nil(Rubydex::Graph.new.send(:resolve_dependency_spec, lazy_spec, {}))
+  end
+
+  # A multi-gem repository such as rails shares one source across every gem it provides, and
+  # building that index reads gemspecs off disk, so it must happen once.
+  def test_a_bundler_source_is_indexed_only_once
+    source = FakeSource.new(FakeIndex.new(FakeSpec.new("gizmo", "/checkout/gizmo", ["lib"])))
+    graph = Rubydex::Graph.new
+    cache = {}
+
+    2.times { graph.send(:resolve_dependency_spec, FakeLazySpec.new("gizmo", source), cache) }
+
+    assert_equal(1, source.specs_calls)
+  end
+
   def test_index_workspace_includes_rbs_core_definitions
     graph = Rubydex::Graph.new
     graph.index_workspace
@@ -2291,5 +2325,55 @@ class GraphTest < Minitest::Test
     before = GC.stat(:total_allocated_objects)
     yield
     GC.stat(:total_allocated_objects) - before
+  end
+
+  # Stand-ins for the Bundler objects behind a `git` or `path` source. Building a real one would
+  # mean checking a repository out during the test.
+  FakeSpec = Struct.new(:name, :full_gem_path, :require_paths)
+  FakeLazySpec = Struct.new(:name, :source)
+
+  class FakeIndex
+    #: (FakeSpec) -> void
+    def initialize(spec)
+      @spec = spec
+    end
+
+    #: (String) -> Array[FakeSpec]
+    def search(name)
+      @spec.name == name ? [@spec] : []
+    end
+  end
+
+  class FakeSource
+    attr_reader :specs_calls #: Integer
+
+    #: (FakeIndex) -> void
+    def initialize(index)
+      @index = index
+      @specs_calls = 0 #: Integer
+    end
+
+    #: -> FakeIndex
+    def specs
+      @specs_calls += 1
+      @index
+    end
+
+    #: -> String
+    def to_s
+      "git://example/gizmo"
+    end
+  end
+
+  class FailingSource
+    #: -> untyped
+    def specs
+      raise(Bundler::GitError, "not yet checked out")
+    end
+
+    #: -> String
+    def to_s
+      "git://example/absent"
+    end
   end
 end
