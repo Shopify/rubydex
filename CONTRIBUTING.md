@@ -57,11 +57,26 @@ To cut a new release:
    git pull --ff-only
    ```
 
-2. Bump the gem version in `lib/rubydex/version.rb`.
+2. Bump the version in `rust/Cargo.toml`:
 
-3. Refresh `Gemfile.lock` so the local `rubydex` spec version matches:
+   ```toml
+   [workspace.package]
+   version = "X.Y.Z"
+   ```
+
+   Match the dependency version in `rust/rubydex-sys/Cargo.toml`:
+
+   ```toml
+   rubydex = { version = "=X.Y.Z", path = "../rubydex" }
+   ```
+
+   This one version covers every crate and the Ruby gem. To ship a beta
+   release, use the format `X.Y.Z-beta.N`. The matching tag is `vX.Y.Z.betaN`.
+
+3. Refresh both lockfiles so their recorded versions match:
 
    ```sh
+   cargo check --manifest-path rust/Cargo.toml
    bundle lock --local
    ```
 
@@ -79,7 +94,7 @@ To cut a new release:
 5. Commit the version bump directly on `main`:
 
    ```sh
-   git add lib/rubydex/version.rb Gemfile.lock
+   git add rust/Cargo.toml rust/Cargo.lock Gemfile.lock
    git commit -m "Bump version to vX.Y.Z"
    git push origin main
    ```
