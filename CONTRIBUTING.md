@@ -57,11 +57,22 @@ To cut a new release:
    git pull --ff-only
    ```
 
-2. Bump the gem version in `lib/rubydex/version.rb`.
+2. In `rust/Cargo.toml`, bump the version under `[workspace.package]` and in the `rubydex` dependency under `[workspace.dependencies]`:
 
-3. Refresh `Gemfile.lock` so the local `rubydex` spec version matches:
+   ```toml
+   [workspace.package]
+   version = "X.Y.Z"
+
+   [workspace.dependencies]
+   rubydex = { version = "=X.Y.Z", path = "rubydex" }
+   ```
+
+   The Ruby gem dynamically reads its version from this manifest, so do not edit `lib/rubydex/version.rb`. For pre-release versions, Cargo requires a SemVer prerelease identifier such as `X.Y.Z-beta.N`, which `lib/rubydex/version.rb` translates to `X.Y.Z.betaN` for RubyGems.
+
+3. Refresh both lockfiles so their recorded versions match:
 
    ```sh
+   cargo check --manifest-path rust/Cargo.toml
    bundle lock --local
    ```
 
@@ -79,7 +90,7 @@ To cut a new release:
 5. Commit the version bump directly on `main`:
 
    ```sh
-   git add lib/rubydex/version.rb Gemfile.lock
+   git add rust/Cargo.toml rust/Cargo.lock Gemfile.lock
    git commit -m "Bump version to vX.Y.Z"
    git push origin main
    ```

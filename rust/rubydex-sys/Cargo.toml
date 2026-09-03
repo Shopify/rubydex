@@ -1,6 +1,6 @@
 [package]
 name = "rubydex-sys"
-version = "0.2.6"
+version.workspace = true
 edition = "2024"
 rust-version = "1.89.0"
 license = "MIT"
@@ -15,7 +15,7 @@ categories = ["development-tools", "external-ffi-bindings"]
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-rubydex = { version = "0.2.6", path = "../rubydex" }
+rubydex.workspace = true
 libc = "0.2.174"
 url = "2.5.4"
 line-index = "0.1.2"
