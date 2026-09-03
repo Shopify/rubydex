@@ -197,7 +197,7 @@ impl<'a> RBSIndexer<'a> {
             // Skip past indentation to the comment text
             current_offset += line_indent as u32;
 
-            let line_text = line[line_indent..].to_string();
+            let line_text: Box<str> = line[line_indent..].into();
             let line_bytes = line_text.len() as u32;
             let offset = Offset::new(current_offset, current_offset + line_bytes);
             comments.push(Comment::new(offset, line_text));

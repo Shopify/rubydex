@@ -1396,7 +1396,7 @@ impl CommentGroup {
         }
         self.comments.push(Comment::new(
             Offset::from_prism_location(&comment.location()),
-            text.trim().to_string(),
+            text.trim().into(),
         ));
     }
 

@@ -4,13 +4,13 @@ use crate::offset::Offset;
 #[derive(Debug, Clone)]
 pub struct Comment {
     offset: Offset,
-    string: String,
+    string: Box<str>,
 }
-assert_mem_size!(Comment, 32);
+assert_mem_size!(Comment, 24);
 
 impl Comment {
     #[must_use]
-    pub fn new(offset: Offset, string: String) -> Self {
+    pub fn new(offset: Offset, string: Box<str>) -> Self {
         Self { offset, string }
     }
 
@@ -20,7 +20,7 @@ impl Comment {
     }
 
     #[must_use]
-    pub fn string(&self) -> &String {
+    pub fn string(&self) -> &str {
         &self.string
     }
 }
