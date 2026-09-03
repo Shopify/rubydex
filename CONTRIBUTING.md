@@ -44,9 +44,9 @@ We try to be on the latest version of Rust and CI always runs against the latest
 
 ## Releasing
 
-Releases are cut by maintainers from `main`. The repository uses
-`shopify/cibuildgem` to build and publish precompiled gems, so do not run
-`rake release` locally.
+Releases are cut by maintainers from `main`. GitHub Actions builds and publishes
+precompiled gems to RubyGems and publishes the crates to crates.io. Do not run
+`rake release` or `cargo publish` locally.
 
 To cut a new release:
 
@@ -103,7 +103,8 @@ To cut a new release:
    ```
 
 Pushing a tag matching `vX.Y.Z` or `vX.Y.Z.betaN` triggers the release workflow
-in `.github/workflows/cibuildgem.yaml`. That workflow cross-compiles the
-precompiled gems, runs install verification, publishes to RubyGems, and creates
-the GitHub release. Workflow dispatch can be used for a dry run; only tag pushes
-publish a release.
+in `.github/workflows/release.yml`. That workflow verifies that the tag matches
+the declared version, cross-compiles the precompiled gems, runs install
+verification, publishes to RubyGems, publishes the workspace crates to
+crates.io, and creates the GitHub release. You can trigger a dry run with
+workflow dispatch; only tag pushes publish a release.
