@@ -119,7 +119,7 @@ pub struct DeclarationCore<T> {
     /// The list of definition IDs that compose this declaration
     definition_ids: Vec<DefinitionId>,
     /// The set of references that are made to this declaration
-    references: IdentityHashSet<T>,
+    references: Vec<T>,
     /// The ID of the owner of this declaration
     owner_id: DeclarationId,
 }
@@ -130,7 +130,7 @@ impl<T: Eq + Hash> DeclarationCore<T> {
         Self {
             name: name.into_boxed_str(),
             definition_ids: Vec::new(),
-            references: IdentityHashSet::default(),
+            references: Vec::new(),
             owner_id,
         }
     }
@@ -152,16 +152,24 @@ impl<T: Eq + Hash> DeclarationCore<T> {
     }
 
     #[must_use]
-    pub fn references(&self) -> &IdentityHashSet<T> {
+    pub fn references(&self) -> &[T] {
         &self.references
     }
 
     pub fn add_reference(&mut self, reference_id: T) {
-        self.references.insert(reference_id);
+        debug_assert!(
+            !self.references.contains(&reference_id),
+            "Cannot add the same exact reference to a declaration twice. Duplicate reference IDs"
+        );
+
+        self.references.push(reference_id);
     }
 
     pub fn remove_reference(&mut self, reference_id: &T) {
-        self.references.remove(reference_id);
+        if let Some(pos) = self.references.iter().position(|id| id == reference_id) {
+            self.references.swap_remove(pos);
+            self.references.shrink_to_fit();
+        }
     }
 
     #[must_use]
@@ -493,7 +501,7 @@ impl Declaration {
     /// Returns the constant reference IDs for declarations that track constant references (`Namespace`, `Constant`,
     /// `ConstantAlias`). Returns `None` for other declaration types.
     #[must_use]
-    pub fn constant_references(&self) -> Option<&IdentityHashSet<ConstantReferenceId>> {
+    pub fn constant_references(&self) -> Option<&[ConstantReferenceId]> {
         match self {
             Declaration::Namespace(it) => Some(it.references()),
             Declaration::Constant(it) | Declaration::ConstantAlias(it) => Some(it.references()),
@@ -559,7 +567,7 @@ impl Namespace {
     }
 
     #[must_use]
-    pub fn references(&self) -> &IdentityHashSet<ConstantReferenceId> {
+    pub fn references(&self) -> &[ConstantReferenceId] {
         all_namespaces!(self, it => &it.core.references)
     }
 
@@ -674,31 +682,31 @@ impl Namespace {
 }
 
 namespace_declaration!(Class, ClassDeclaration);
-assert_mem_size!(ClassDeclaration, 184);
+assert_mem_size!(ClassDeclaration, 176);
 namespace_declaration!(Module, ModuleDeclaration);
-assert_mem_size!(ModuleDeclaration, 184);
+assert_mem_size!(ModuleDeclaration, 176);
 namespace_declaration!(SingletonClass, SingletonClassDeclaration);
-assert_mem_size!(SingletonClassDeclaration, 184);
+assert_mem_size!(SingletonClassDeclaration, 176);
 namespace_declaration!(Todo, TodoDeclaration);
-assert_mem_size!(TodoDeclaration, 184);
+assert_mem_size!(TodoDeclaration, 176);
 
 pub type ConstantDeclaration = DeclarationCore<ConstantReferenceId>;
-assert_mem_size!(ConstantDeclaration, 80);
+assert_mem_size!(ConstantDeclaration, 72);
 
 pub type MethodDeclaration = DeclarationCore<MethodReferenceId>;
-assert_mem_size!(MethodDeclaration, 80);
+assert_mem_size!(MethodDeclaration, 72);
 
 pub type GlobalVariableDeclaration = DeclarationCore<GlobalVariableReferenceId>;
-assert_mem_size!(GlobalVariableDeclaration, 80);
+assert_mem_size!(GlobalVariableDeclaration, 72);
 
 pub type InstanceVariableDeclaration = DeclarationCore<InstanceVariableReferenceId>;
-assert_mem_size!(InstanceVariableDeclaration, 80);
+assert_mem_size!(InstanceVariableDeclaration, 72);
 
 pub type ClassVariableDeclaration = DeclarationCore<ClassVariableReferenceId>;
-assert_mem_size!(ClassVariableDeclaration, 80);
+assert_mem_size!(ClassVariableDeclaration, 72);
 
 pub type ConstantAliasDeclaration = DeclarationCore<ConstantReferenceId>;
-assert_mem_size!(ConstantAliasDeclaration, 80);
+assert_mem_size!(ConstantAliasDeclaration, 72);
 
 #[cfg(test)]
 mod tests {

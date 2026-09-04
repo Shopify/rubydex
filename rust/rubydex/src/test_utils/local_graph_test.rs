@@ -24,22 +24,29 @@ impl LocalGraphTest {
 
     #[must_use]
     pub fn new_with_backend(uri: &str, source: &str, backend: IndexerBackend) -> Self {
-        let uri = uri.to_string();
         let source = normalize_indentation(source);
-        let graph = build_local_graph(uri.clone(), &source, &LanguageId::Ruby, backend);
-        Self { uri, source, graph }
+        let graph = build_local_graph(uri.into(), &source, &LanguageId::Ruby, backend);
+
+        Self {
+            uri: uri.to_string(),
+            source,
+            graph,
+        }
     }
 
     #[must_use]
     pub fn new_rbs(uri: &str, source: &str) -> Self {
-        let uri = uri.to_string();
         let source = normalize_indentation(source);
 
-        let mut indexer = RBSIndexer::new(uri.clone(), &source);
+        let mut indexer = RBSIndexer::new(uri.into(), &source);
         indexer.index();
         let graph = indexer.local_graph();
 
-        Self { uri, source, graph }
+        Self {
+            uri: uri.to_string(),
+            source,
+            graph,
+        }
     }
 
     #[must_use]

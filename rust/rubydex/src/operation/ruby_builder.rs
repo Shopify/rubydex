@@ -87,8 +87,8 @@ pub struct RubyOperationBuilder<'a> {
 
 impl<'a> RubyOperationBuilder<'a> {
     #[must_use]
-    pub fn new(uri: String, source: &'a str) -> Self {
-        let uri_id = UriId::from(&uri);
+    pub fn new(uri: Box<str>, source: &'a str) -> Self {
+        let uri_id = UriId::from(&*uri);
 
         Self {
             uri_id,
@@ -2229,7 +2229,7 @@ mod tests {
 
     fn build_operations(source: &str) -> OperationBuilderResult {
         let source = crate::test_utils::normalize_indentation(source);
-        let builder = RubyOperationBuilder::new("file:///test.rb".to_string(), &source);
+        let builder = RubyOperationBuilder::new("file:///test.rb".into(), &source);
         builder.build()
     }
 

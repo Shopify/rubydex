@@ -10,7 +10,7 @@ use crate::model::declaration::{Ancestor, Declaration, Namespace};
 use crate::model::definitions::{Definition, Parameter};
 use crate::model::graph::Graph;
 use crate::model::identity_maps::IdentityHashSet;
-use crate::model::ids::{DeclarationId, DefinitionId, NameId, StringId, UriId};
+use crate::model::ids::{ConstantReferenceId, DeclarationId, DefinitionId, NameId, StringId, UriId};
 use crate::model::keywords::{self, Keyword};
 use crate::model::name::NameRef;
 use crate::model::visibility::Visibility;
@@ -875,7 +875,8 @@ pub fn dead_code_candidates(graph: &Graph) -> Vec<DeclarationId> {
                         .iter()
                         .filter(|id| {
                             let decl = declarations.get(id).unwrap();
-                            decl.constant_references().is_some_and(HashSet::is_empty)
+                            decl.constant_references()
+                                .is_some_and(<[ConstantReferenceId]>::is_empty)
                                 && !matches!(decl, Declaration::Namespace(Namespace::SingletonClass(_)))
                                 && !decl.has_no_definitions()
                                 && !is_built_in(graph, decl)
