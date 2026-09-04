@@ -745,7 +745,7 @@ pub unsafe extern "C" fn rdx_index_source(
     };
 
     with_mut_graph(pointer, |graph| {
-        indexing::index_source(graph, &uri_str, source_str, &language);
+        indexing::index_source(graph, uri_str.into(), source_str, &language);
         IndexSourceResult::Success
     })
 }

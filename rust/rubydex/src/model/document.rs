@@ -12,7 +12,7 @@ use crate::model::ids::{ConstantReferenceId, DefinitionId, MethodReferenceId};
 // definitions and references discovered in it
 #[derive(Debug)]
 pub struct Document {
-    uri: String,
+    uri: Box<str>,
     line_index: LineIndex,
     definition_ids: Vec<DefinitionId>,
     method_reference_ids: Vec<MethodReferenceId>,
@@ -20,11 +20,11 @@ pub struct Document {
     diagnostics: Vec<Diagnostic>,
     content_hash: u64,
 }
-assert_mem_size!(Document, 184);
+assert_mem_size!(Document, 176);
 
 impl Document {
     #[must_use]
-    pub fn new(uri: String, source: &str) -> Self {
+    pub fn new(uri: Box<str>, source: &str) -> Self {
         Self {
             uri,
             line_index: LineIndex::new(source),
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Cannot add the same exact definition to a document twice. Duplicate definition IDs")]
     fn inserting_duplicate_definitions() {
-        let mut document = Document::new("file:///foo.rb".to_string(), "class Foo; end");
+        let mut document = Document::new("file:///foo.rb".into(), "class Foo; end");
         let def_id = DefinitionId::new(123);
 
         document.add_definition(def_id);
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn tracking_references() {
-        let mut document = Document::new("file:///foo.rb".to_string(), "class Foo; end");
+        let mut document = Document::new("file:///foo.rb".into(), "class Foo; end");
         let method_ref = MethodReferenceId::new(1);
         let constant_ref = ConstantReferenceId::new(2);
 
@@ -202,7 +202,7 @@ mod tests {
     fn require_path() {
         let root = test_root();
         let path = root.join("lib").join("foo").join("bar.rb");
-        let uri = Url::from_file_path(path).unwrap().to_string();
+        let uri = Url::from_file_path(path).unwrap().to_string().into();
         let load_paths = [root.join("lib")];
 
         let document = Document::new(uri, "");
@@ -213,7 +213,7 @@ mod tests {
     fn require_path_first_load_path_wins() {
         let root = test_root();
         let path = root.join("a").join("b").join("foo.rb");
-        let uri = Url::from_file_path(path).unwrap().to_string();
+        let uri = Url::from_file_path(path).unwrap().to_string().into();
         let load_path_a = root.join("a");
         let load_path_ab = root.join("a").join("b");
         let load_paths = [load_path_a, load_path_ab];
@@ -228,18 +228,18 @@ mod tests {
         let load_paths = [root.join("lib")];
 
         // non-file URI
-        let document = Document::new("untitled:Untitled-1".to_string(), "");
+        let document = Document::new("untitled:Untitled-1".into(), "");
         assert!(document.require_path(&load_paths).is_none());
 
         // non-.rb extension
         let path = root.join("lib").join("foo.so");
-        let uri = Url::from_file_path(path).unwrap().to_string();
+        let uri = Url::from_file_path(path).unwrap().to_string().into();
         let document = Document::new(uri, "");
         assert!(document.require_path(&load_paths).is_none());
 
         // /libfoo is not under /lib - should not match due to partial directory name
         let path = root.join("libfoo").join("bar.rb");
-        let uri = Url::from_file_path(path).unwrap().to_string();
+        let uri = Url::from_file_path(path).unwrap().to_string().into();
         let document = Document::new(uri, "");
         assert!(document.require_path(&load_paths).is_none());
     }
@@ -248,7 +248,7 @@ mod tests {
     fn require_path_with_spaces() {
         let root = test_root();
         let path = root.join("lib").join("space foo").join("bar.rb");
-        let uri = Url::from_file_path(path).unwrap().to_string();
+        let uri = Url::from_file_path(path).unwrap().to_string().into();
         let load_paths = [root.join("lib")];
 
         let document = Document::new(uri, "");

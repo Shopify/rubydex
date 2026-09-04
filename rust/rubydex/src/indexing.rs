@@ -101,7 +101,7 @@ impl Job for IndexingJob {
         };
 
         let language = self.path.extension().map_or(LanguageId::Ruby, LanguageId::from);
-        let local_graph = build_local_graph(url.to_string(), &source, &language, self.backend);
+        let local_graph = build_local_graph(url.to_string().into(), &source, &language, self.backend);
 
         self.local_graph_tx
             .send(local_graph)
@@ -110,8 +110,8 @@ impl Job for IndexingJob {
 }
 
 /// Indexes a single source string in memory, dispatching to the appropriate indexer based on `language_id`.
-pub fn index_source(graph: &mut Graph, uri: &str, source: &str, language_id: &LanguageId) {
-    let local_graph = build_local_graph(uri.to_string(), source, language_id, IndexerBackend::RubyIndexer);
+pub fn index_source(graph: &mut Graph, uri: Box<str>, source: &str, language_id: &LanguageId) {
+    let local_graph = build_local_graph(uri, source, language_id, IndexerBackend::RubyIndexer);
     graph.consume_document_changes(local_graph);
 }
 
@@ -153,7 +153,7 @@ pub fn index_files(graph: &mut Graph, paths: Vec<PathBuf>, backend: IndexerBacke
 
 /// Indexes a source string using the appropriate indexer for the given language.
 #[must_use]
-pub fn build_local_graph(uri: String, source: &str, language: &LanguageId, backend: IndexerBackend) -> LocalGraph {
+pub fn build_local_graph(uri: Box<str>, source: &str, language: &LanguageId, backend: IndexerBackend) -> LocalGraph {
     match language {
         LanguageId::Ruby => match backend {
             IndexerBackend::RubyIndexer => {
@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(6, graph.definitions().len());
         assert_eq!(2, graph.documents().len());
 
-        index_source(&mut graph, &uri, "", &LanguageId::Ruby);
+        index_source(&mut graph, uri.into(), "", &LanguageId::Ruby);
 
         assert_eq!(5, graph.definitions().len());
         assert_eq!(2, graph.documents().len());

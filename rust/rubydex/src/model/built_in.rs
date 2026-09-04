@@ -48,7 +48,7 @@ pub fn add_built_in_data(graph: &mut Graph) {
       class Class < Module
       end
     ";
-    indexing::index_source(graph, uri.as_ref(), source, &LanguageId::Rbs);
+    indexing::index_source(graph, uri.to_string().into(), source, &LanguageId::Rbs);
 
     // Creating declarations eagerly is still necessary because we need to associate correct ownership data no matter in
     // what order we discover classes and modules

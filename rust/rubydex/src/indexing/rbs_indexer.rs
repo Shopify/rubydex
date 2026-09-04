@@ -33,8 +33,8 @@ pub struct RBSIndexer<'a> {
 
 impl<'a> RBSIndexer<'a> {
     #[must_use]
-    pub fn new(uri: String, source: &'a str) -> Self {
-        let uri_id = UriId::from(&uri);
+    pub fn new(uri: Box<str>, source: &'a str) -> Self {
+        let uri_id = UriId::from(&*uri);
         let local_graph = LocalGraph::new(uri_id, Document::new(uri, source));
 
         Self {
@@ -1454,7 +1454,7 @@ mod tests {
     fn split_multiline_comments_crlf() {
         // Build the indexer directly to bypass normalize_indentation, which strips \r
         let source = "# First line\r\n# Second line\r\nclass Foo\r\nend\r\n";
-        let mut indexer = RBSIndexer::new("file:///foo.rbs".to_string(), source);
+        let mut indexer = RBSIndexer::new("file:///foo.rbs".into(), source);
         indexer.index();
         let context = LocalGraphTest::from_local_graph("file:///foo.rbs", source, indexer.local_graph());
 
