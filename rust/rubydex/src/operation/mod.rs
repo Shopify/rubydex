@@ -7,8 +7,8 @@
 //! Each operation is self-contained: it carries enough context (`name_id`, etc.) to know what it
 //! defines, while scope context is provided by surrounding Enter/Exit scope operations.
 //!
-//! The builder produces a `Vec<Operation>` for each file. These operations are then applied in order
-//! by the applier to produce definitions and declarations in the graph.
+//! The builder produces a `Vec<CompiledItem>` for each file. Semantic operations are applied in order,
+//! while resolution-dependent calls are preserved for the resolver.
 //!
 //! # Example
 //!
@@ -27,9 +27,11 @@
 //! 5. `ExitScope` # exit class Foo
 
 pub mod applier;
+pub mod deferred;
 pub mod printer;
 pub mod ruby_builder;
 
+use crate::assert_mem_size;
 use crate::model::{
     comment::Comment,
     definitions::{DefinitionFlags, Signatures},
@@ -37,6 +39,18 @@ use crate::model::{
     visibility::Visibility,
 };
 use crate::offset::Offset;
+use deferred::DeferredCall;
+
+/// An item produced by a source compiler.
+///
+/// Semantic operations and resolution-dependent calls share one stream so source ordering is
+/// preserved without treating a deferred call as a semantic operation.
+#[derive(Debug)]
+pub enum CompiledItem {
+    Operation(Operation),
+    DeferredCall(DeferredCall),
+}
+assert_mem_size!(CompiledItem, 96);
 
 /// An ordered instruction extracted from Ruby/RBS source code.
 ///
@@ -83,6 +97,7 @@ pub enum Operation {
     /// Record a reference to a method (for tracking usages).
     ReferenceMethod(ReferenceMethod),
 }
+assert_mem_size!(Operation, 96);
 
 /// A resolved target as it appears in source code.
 ///

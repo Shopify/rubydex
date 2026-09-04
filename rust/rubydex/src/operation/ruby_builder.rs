@@ -1,7 +1,7 @@
-//! Visit the Ruby AST and produce an ordered list of operations.
+//! Visit the Ruby AST and produce an ordered list of compiled items.
 //!
-//! Walks the parsed AST and produces `Vec<Operation>` that can later be applied
-//! by the applier to create definitions and declarations in a `LocalGraph`.
+//! Walks the parsed AST and produces `Vec<CompiledItem>` containing semantic operations and
+//! resolution-dependent calls.
 
 use std::collections::hash_map::Entry;
 
@@ -15,19 +15,20 @@ use crate::model::name::{Name, NameRef, ParentScope};
 use crate::model::string_ref::StringRef;
 use crate::model::visibility::Visibility;
 use crate::offset::Offset;
-use crate::operation::{self as op, AttrKind, MixinKind, Operation, Target};
+use crate::operation::deferred::{DeferredArgument, DeferredCall, DeferredConstantAssignment};
+use crate::operation::{self as op, AttrKind, CompiledItem, MixinKind, Operation, Target};
 
 use ruby_prism::{ParseResult, Visit};
 
 /// The result of running the operation builder on a Ruby source file.
 ///
-/// Contains the ordered operations and all interning data (strings, names, references)
+/// Contains the ordered compiled items and all interning data (strings, names, references)
 /// needed to later apply the operations to a graph.
 #[derive(Debug)]
 pub struct OperationBuilderResult {
     pub uri_id: UriId,
     pub document: Document,
-    pub operations: Vec<Operation>,
+    pub items: Vec<CompiledItem>,
     pub strings: IdentityHashMap<StringId, StringRef>,
     pub names: IdentityHashMap<NameId, NameRef>,
 }
@@ -68,7 +69,7 @@ impl VisibilityModifier {
     }
 }
 
-/// Visits the Ruby AST and produces an ordered list of operations.
+/// Visits the Ruby AST and produces an ordered list of compiled items.
 pub struct RubyOperationBuilder<'a> {
     uri_id: UriId,
     source: &'a str,
@@ -82,7 +83,7 @@ pub struct RubyOperationBuilder<'a> {
     visibility_stack: Vec<VisibilityModifier>,
     pending_decorator_offset: Option<Offset>,
     // Output
-    operations: Vec<Operation>,
+    items: Vec<CompiledItem>,
 }
 
 impl<'a> RubyOperationBuilder<'a> {
@@ -100,7 +101,7 @@ impl<'a> RubyOperationBuilder<'a> {
             nesting_stack: Vec::new(),
             visibility_stack: vec![VisibilityModifier::new(Visibility::Private, false, Offset::new(0, 0))],
             pending_decorator_offset: None,
-            operations: Vec::new(),
+            items: Vec::new(),
         }
     }
 
@@ -130,10 +131,14 @@ impl<'a> RubyOperationBuilder<'a> {
         OperationBuilderResult {
             uri_id: self.uri_id,
             document: self.document,
-            operations: self.operations,
+            items: self.items,
             strings: self.strings,
             names: self.names,
         }
+    }
+
+    fn push_operation(&mut self, operation: Operation) {
+        self.items.push(CompiledItem::Operation(operation));
     }
 
     // -- Interning --
@@ -364,12 +369,11 @@ impl<'a> RubyOperationBuilder<'a> {
         let name_id = self.add_name(string_id, parent_scope_id, self.current_lexical_scope_name_id());
 
         if push_final_reference {
-            self.operations
-                .push(Operation::ReferenceConstant(op::ReferenceConstant {
-                    name_id,
-                    uri_id: self.uri_id,
-                    offset,
-                }));
+            self.push_operation(Operation::ReferenceConstant(op::ReferenceConstant {
+                name_id,
+                uri_id: self.uri_id,
+                offset,
+            }));
         }
 
         Some(name_id)
@@ -378,7 +382,7 @@ impl<'a> RubyOperationBuilder<'a> {
     fn index_method_reference(&mut self, name: String, location: &ruby_prism::Location, receiver: Option<NameId>) {
         let offset = Offset::from_prism_location(location);
         let str_id = self.intern_string(name);
-        self.operations.push(Operation::ReferenceMethod(op::ReferenceMethod {
+        self.push_operation(Operation::ReferenceMethod(op::ReferenceMethod {
             str_id,
             uri_id: self.uri_id,
             offset,
@@ -478,12 +482,11 @@ impl<'a> RubyOperationBuilder<'a> {
 
         let location = receiver.map_or(fallback_location, ruby_prism::Node::location);
         let offset = Offset::from_prism_location(&location);
-        self.operations
-            .push(Operation::ReferenceConstant(op::ReferenceConstant {
-                name_id: new_name_id,
-                uri_id: self.uri_id,
-                offset,
-            }));
+        self.push_operation(Operation::ReferenceConstant(op::ReferenceConstant {
+            name_id: new_name_id,
+            uri_id: self.uri_id,
+            offset,
+        }));
         Some(new_name_id)
     }
 
@@ -635,12 +638,11 @@ impl<'a> RubyOperationBuilder<'a> {
         let (comments, flags) = self.find_comments_for(offset.start());
         let superclass_name = superclass_node.as_ref().and_then(|n| {
             if let Some(id) = self.index_constant_reference(n, false) {
-                self.operations
-                    .push(Operation::ReferenceConstant(op::ReferenceConstant {
-                        name_id: id,
-                        uri_id: self.uri_id,
-                        offset: Offset::from_prism_location(&n.location()),
-                    }));
+                self.push_operation(Operation::ReferenceConstant(op::ReferenceConstant {
+                    name_id: id,
+                    uri_id: self.uri_id,
+                    offset: Offset::from_prism_location(&n.location()),
+                }));
                 return Some(id);
             }
 
@@ -649,12 +651,11 @@ impl<'a> RubyOperationBuilder<'a> {
                 if let Some(receiver) = call.receiver()
                     && let Some(id) = self.index_constant_reference(&receiver, false)
                 {
-                    self.operations
-                        .push(Operation::ReferenceConstant(op::ReferenceConstant {
-                            name_id: id,
-                            uri_id: self.uri_id,
-                            offset: Offset::from_prism_location(&receiver.location()),
-                        }));
+                    self.push_operation(Operation::ReferenceConstant(op::ReferenceConstant {
+                        name_id: id,
+                        uri_id: self.uri_id,
+                        offset: Offset::from_prism_location(&receiver.location()),
+                    }));
                     return Some(id);
                 }
             }
@@ -690,7 +691,7 @@ impl<'a> RubyOperationBuilder<'a> {
         };
 
         if let Some(name_id) = name_id {
-            self.operations.push(Operation::EnterClass(op::EnterClass {
+            self.push_operation(Operation::EnterClass(op::EnterClass {
                 name_id,
                 uri_id: self.uri_id,
                 offset: offset.clone(),
@@ -720,7 +721,7 @@ impl<'a> RubyOperationBuilder<'a> {
             }
             self.visibility_stack.pop();
             self.nesting_stack.pop();
-            self.operations.push(Operation::ExitScope);
+            self.push_operation(Operation::ExitScope);
         }
     }
 
@@ -752,7 +753,7 @@ impl<'a> RubyOperationBuilder<'a> {
         };
 
         if let Some(name_id) = name_id {
-            self.operations.push(Operation::EnterModule(op::EnterModule {
+            self.push_operation(Operation::EnterModule(op::EnterModule {
                 name_id,
                 uri_id: self.uri_id,
                 offset: offset.clone(),
@@ -781,7 +782,7 @@ impl<'a> RubyOperationBuilder<'a> {
             }
             self.visibility_stack.pop();
             self.nesting_stack.pop();
-            self.operations.push(Operation::ExitScope);
+            self.push_operation(Operation::ExitScope);
         }
     }
 
@@ -815,6 +816,101 @@ impl<'a> RubyOperationBuilder<'a> {
         }
 
         self.index_method_reference_for_call(&call_node);
+        true
+    }
+
+    /// Captures a resolution-dependent constant assignment as a **shadow** observation candidate.
+    ///
+    /// Pass 2 prototype policy: eligible `Const = Receiver.new(...)` sites still emit the normal
+    /// `DefineConstant` contribution (preserving `OperationBuilder` graph semantics) and *also*
+    /// emit a non-authoritative `DeferredCall` for semantic compiler-selection experiments.
+    /// Matched Struct expansions are not applied to the Graph in this pass.
+    fn defer_constant_assignment_call(&mut self, node: &ruby_prism::Node, value: &ruby_prism::Node) -> bool {
+        let Some(call_node) = value.as_call_node() else {
+            return false;
+        };
+
+        if call_node.name().as_slice() != b"new" || call_node.block().is_some() {
+            return false;
+        }
+
+        let Some(receiver) = call_node.receiver() else {
+            return false;
+        };
+        if !matches!(
+            receiver,
+            ruby_prism::Node::ConstantReadNode { .. } | ruby_prism::Node::ConstantPathNode { .. }
+        ) {
+            return false;
+        }
+
+        let Some(assignment_name_id) = self.index_constant_reference(node, false) else {
+            return false;
+        };
+
+        let offset = Offset::from_prism_location(&node.location());
+        let name_location = match node {
+            ruby_prism::Node::ConstantWriteNode { .. } => node.as_constant_write_node().unwrap().name_loc(),
+            ruby_prism::Node::ConstantPathWriteNode { .. } => {
+                node.as_constant_path_write_node().unwrap().target().name_loc()
+            }
+            _ => return false,
+        };
+        let name_offset = Offset::from_prism_location(&name_location);
+        let (comments, mut flags) = self.find_comments_for(name_offset.start());
+        flags |= DefinitionFlags::PROMOTABLE;
+
+        // Preserve ordinary OperationBuilder semantics for the LHS.
+        self.push_operation(Operation::DefineConstant(op::DefineConstant {
+            name_id: assignment_name_id,
+            uri_id: self.uri_id,
+            offset: name_offset.clone(),
+            comments,
+            flags: flags.clone(),
+        }));
+
+        let Some(method_receiver_name_id) = self.method_receiver(Some(&receiver), call_node.location()) else {
+            return false;
+        };
+        let receiver_name_id = match self.names.get(&method_receiver_name_id).unwrap().parent_scope() {
+            ParentScope::Attached(receiver_name_id) => *receiver_name_id,
+            _ => return false,
+        };
+
+        let arguments = if let Some(arguments) = call_node.arguments() {
+            let mut deferred_arguments = Vec::new();
+            for argument in &arguments.arguments() {
+                if let Some((name, _)) = Self::extract_literal_name(&argument) {
+                    deferred_arguments.push(DeferredArgument::LiteralName(self.intern_string(name)));
+                } else {
+                    // Keep nested constant/method refs indexed even when the arg is
+                    // unsupported for deferred compilation.
+                    self.visit(&argument);
+                    deferred_arguments.push(DeferredArgument::Unsupported);
+                }
+            }
+            deferred_arguments.into_boxed_slice()
+        } else {
+            Box::default()
+        };
+
+        let method_name = self.intern_string(String::from_utf8_lossy(call_node.name().as_slice()).to_string());
+        let assignment = DeferredConstantAssignment::new(assignment_name_id, offset, name_offset, flags);
+        let call = DeferredCall::new(
+            self.uri_id,
+            Offset::from_prism_location(&call_node.location()),
+            receiver_name_id,
+            method_name,
+            assignment,
+            arguments,
+        );
+        self.items.push(CompiledItem::DeferredCall(call));
+        self.push_operation(Operation::ReferenceMethod(op::ReferenceMethod {
+            str_id: method_name,
+            uri_id: self.uri_id,
+            offset: Offset::from_prism_location(&call_node.message_loc().unwrap()),
+            receiver: Some(Target::Constant(method_receiver_name_id)),
+        }));
         true
     }
 
@@ -862,14 +958,13 @@ impl<'a> RubyOperationBuilder<'a> {
 
         // Mixin operations with multiple arguments are inserted in reverse
         for (name_id, offset) in mixin_arguments.into_iter().rev() {
-            self.operations
-                .push(Operation::ReferenceConstant(op::ReferenceConstant {
-                    name_id,
-                    uri_id: self.uri_id,
-                    offset,
-                }));
+            self.push_operation(Operation::ReferenceConstant(op::ReferenceConstant {
+                name_id,
+                uri_id: self.uri_id,
+                offset,
+            }));
 
-            self.operations.push(Operation::Mixin(op::Mixin {
+            self.push_operation(Operation::Mixin(op::Mixin {
                 kind,
                 target: Target::Constant(name_id),
             }));
@@ -923,16 +1018,15 @@ impl<'a> RubyOperationBuilder<'a> {
             let str_id = self.intern_string(name);
             let offset = Offset::from_prism_location(&location);
 
-            self.operations
-                .push(Operation::SetConstantVisibility(op::SetConstantVisibility {
-                    receiver: receiver_name_id.map(Target::Constant),
-                    target: str_id,
-                    visibility,
-                    uri_id: self.uri_id,
-                    offset,
-                    comments: Box::default(),
-                    flags: DefinitionFlags::empty(),
-                }));
+            self.push_operation(Operation::SetConstantVisibility(op::SetConstantVisibility {
+                receiver: receiver_name_id.map(Target::Constant),
+                target: str_id,
+                visibility,
+                uri_id: self.uri_id,
+                offset,
+                comments: Box::default(),
+                flags: DefinitionFlags::empty(),
+            }));
         }
     }
 
@@ -958,7 +1052,7 @@ impl<'a> RubyOperationBuilder<'a> {
         if promotable {
             flags |= DefinitionFlags::PROMOTABLE;
         }
-        self.operations.push(Operation::DefineConstant(op::DefineConstant {
+        self.push_operation(Operation::DefineConstant(op::DefineConstant {
             name_id,
             uri_id: self.uri_id,
             offset,
@@ -1020,7 +1114,7 @@ impl<'a> RubyOperationBuilder<'a> {
         let offset = Offset::from_prism_location(&location);
         let (comments, flags) = self.find_comments_for(offset.start());
 
-        self.operations.push(Operation::AliasConstant(op::AliasConstant {
+        self.push_operation(Operation::AliasConstant(op::AliasConstant {
             name_id,
             target_name_id,
             uri_id: self.uri_id,
@@ -1074,24 +1168,22 @@ impl<'a> RubyOperationBuilder<'a> {
             if matches!(arg, ruby_prism::Node::DefNode { .. }) || (arg_count == 1 && Self::is_attr_call(&arg)) {
                 let previous_visibility = self.current_visibility().visibility;
 
-                self.operations
-                    .push(Operation::SetDefaultVisibility(op::SetDefaultVisibility {
-                        visibility,
-                        uri_id: self.uri_id,
-                        offset: call_offset.clone(),
-                    }));
+                self.push_operation(Operation::SetDefaultVisibility(op::SetDefaultVisibility {
+                    visibility,
+                    uri_id: self.uri_id,
+                    offset: call_offset.clone(),
+                }));
 
                 self.visibility_stack
                     .push(VisibilityModifier::new(visibility, true, call_offset.clone()));
                 self.visit(&arg);
                 self.visibility_stack.pop();
 
-                self.operations
-                    .push(Operation::SetDefaultVisibility(op::SetDefaultVisibility {
-                        visibility: previous_visibility,
-                        uri_id: self.uri_id,
-                        offset: call_offset.clone(),
-                    }));
+                self.push_operation(Operation::SetDefaultVisibility(op::SetDefaultVisibility {
+                    visibility: previous_visibility,
+                    uri_id: self.uri_id,
+                    offset: call_offset.clone(),
+                }));
             } else if matches!(
                 arg,
                 ruby_prism::Node::SymbolNode { .. } | ruby_prism::Node::StringNode { .. }
@@ -1135,14 +1227,13 @@ impl<'a> RubyOperationBuilder<'a> {
         let str_id = self.intern_string(format!("{name}()"));
         let offset = Offset::from_prism_location(&location);
 
-        self.operations
-            .push(Operation::SetMethodVisibility(op::SetMethodVisibility {
-                str_id,
-                visibility,
-                uri_id: self.uri_id,
-                offset,
-                flags,
-            }));
+        self.push_operation(Operation::SetMethodVisibility(op::SetMethodVisibility {
+            str_id,
+            visibility,
+            uri_id: self.uri_id,
+            offset,
+            flags,
+        }));
     }
 
     fn create_method_visibility_operation_from_name(
@@ -1155,14 +1246,13 @@ impl<'a> RubyOperationBuilder<'a> {
         let str_id = self.intern_string(format!("{name}()"));
         let offset = Offset::from_prism_location(location);
 
-        self.operations
-            .push(Operation::SetMethodVisibility(op::SetMethodVisibility {
-                str_id,
-                visibility,
-                uri_id: self.uri_id,
-                offset,
-                flags,
-            }));
+        self.push_operation(Operation::SetMethodVisibility(op::SetMethodVisibility {
+            str_id,
+            visibility,
+            uri_id: self.uri_id,
+            offset,
+            flags,
+        }));
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1311,14 +1401,13 @@ impl<'a> RubyOperationBuilder<'a> {
         let offset = Offset::from_prism_location(location);
         let (comments, flags) = self.find_comments_for(offset.start());
 
-        self.operations
-            .push(Operation::DefineGlobalVariable(op::DefineGlobalVariable {
-                str_id,
-                uri_id: self.uri_id,
-                offset,
-                comments,
-                flags,
-            }));
+        self.push_operation(Operation::DefineGlobalVariable(op::DefineGlobalVariable {
+            str_id,
+            uri_id: self.uri_id,
+            offset,
+            comments,
+            flags,
+        }));
     }
 
     fn add_instance_variable_definition(&mut self, location: &ruby_prism::Location) {
@@ -1327,14 +1416,13 @@ impl<'a> RubyOperationBuilder<'a> {
         let offset = Offset::from_prism_location(location);
         let (comments, flags) = self.find_comments_for(offset.start());
 
-        self.operations
-            .push(Operation::DefineInstanceVariable(op::DefineInstanceVariable {
-                str_id,
-                uri_id: self.uri_id,
-                offset,
-                comments,
-                flags,
-            }));
+        self.push_operation(Operation::DefineInstanceVariable(op::DefineInstanceVariable {
+            str_id,
+            uri_id: self.uri_id,
+            offset,
+            comments,
+            flags,
+        }));
     }
 
     fn add_class_variable_definition(&mut self, location: &ruby_prism::Location) {
@@ -1343,14 +1431,13 @@ impl<'a> RubyOperationBuilder<'a> {
         let offset = Offset::from_prism_location(location);
         let (comments, flags) = self.find_comments_for(offset.start());
 
-        self.operations
-            .push(Operation::DefineClassVariable(op::DefineClassVariable {
-                str_id,
-                uri_id: self.uri_id,
-                offset,
-                comments,
-                flags,
-            }));
+        self.push_operation(Operation::DefineClassVariable(op::DefineClassVariable {
+            str_id,
+            uri_id: self.uri_id,
+            offset,
+            comments,
+            flags,
+        }));
     }
 
     fn visit_method_body(&mut self, receiver: Option<NestingReceiver>, body: Option<&ruby_prism::Node<'_>>) {
@@ -1483,15 +1570,14 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
         let string_id = self.intern_string(singleton_class_name);
         let nesting = self.current_lexical_scope_name_id();
         let name_id = self.add_name(string_id, ParentScope::Attached(attached_target), nesting);
-        self.operations
-            .push(Operation::EnterSingletonClass(op::EnterSingletonClass {
-                name_id,
-                uri_id: self.uri_id,
-                offset: offset.clone(),
-                name_offset,
-                comments,
-                flags,
-            }));
+        self.push_operation(Operation::EnterSingletonClass(op::EnterSingletonClass {
+            name_id,
+            uri_id: self.uri_id,
+            offset: offset.clone(),
+            name_offset,
+            comments,
+            flags,
+        }));
 
         self.nesting_stack.push(Nesting::LexicalScope {
             name_id,
@@ -1504,7 +1590,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
         }
         self.visibility_stack.pop();
         self.nesting_stack.pop();
-        self.operations.push(Operation::ExitScope);
+        self.push_operation(Operation::ExitScope);
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1573,7 +1659,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
             let singleton_receiver = Some(Target::ExplicitSelf);
             let body = node.body();
 
-            self.operations.push(Operation::EnterMethod(op::EnterMethod {
+            self.push_operation(Operation::EnterMethod(op::EnterMethod {
                 str_id,
                 uri_id: self.uri_id,
                 offset: offset.clone(),
@@ -1583,9 +1669,9 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 signatures: Signatures::Simple(parameters.clone().into_boxed_slice()),
                 receiver: singleton_receiver,
             }));
-            self.operations.push(Operation::ExitScope);
+            self.push_operation(Operation::ExitScope);
 
-            self.operations.push(Operation::EnterMethod(op::EnterMethod {
+            self.push_operation(Operation::EnterMethod(op::EnterMethod {
                 str_id,
                 uri_id: self.uri_id,
                 offset: offset.clone(),
@@ -1596,25 +1682,24 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 receiver,
             }));
             self.visit_method_body(method_nesting_receiver, body.as_ref());
-            self.operations.push(Operation::ExitScope);
+            self.push_operation(Operation::ExitScope);
         } else {
             // Singleton methods at top level have receiver=None (no class to point self to).
             // Bracket with SetDefaultVisibility(Public) so the applier assigns the correct visibility.
             let needs_singleton_visibility_bracket = is_singleton && receiver.is_none();
             let previous_visibility = if needs_singleton_visibility_bracket {
                 let prev = self.current_visibility().visibility;
-                self.operations
-                    .push(Operation::SetDefaultVisibility(op::SetDefaultVisibility {
-                        visibility: Visibility::Public,
-                        uri_id: self.uri_id,
-                        offset: offset.clone(),
-                    }));
+                self.push_operation(Operation::SetDefaultVisibility(op::SetDefaultVisibility {
+                    visibility: Visibility::Public,
+                    uri_id: self.uri_id,
+                    offset: offset.clone(),
+                }));
                 Some(prev)
             } else {
                 None
             };
 
-            self.operations.push(Operation::EnterMethod(op::EnterMethod {
+            self.push_operation(Operation::EnterMethod(op::EnterMethod {
                 str_id,
                 uri_id: self.uri_id,
                 offset: offset.clone(),
@@ -1626,15 +1711,14 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
             }));
             let body = node.body();
             self.visit_method_body(method_nesting_receiver, body.as_ref());
-            self.operations.push(Operation::ExitScope);
+            self.push_operation(Operation::ExitScope);
 
             if let Some(prev) = previous_visibility {
-                self.operations
-                    .push(Operation::SetDefaultVisibility(op::SetDefaultVisibility {
-                        visibility: prev,
-                        uri_id: self.uri_id,
-                        offset: offset.clone(),
-                    }));
+                self.push_operation(Operation::SetDefaultVisibility(op::SetDefaultVisibility {
+                    visibility: prev,
+                    uri_id: self.uri_id,
+                    offset: offset.clone(),
+                }));
             }
         }
     }
@@ -1661,6 +1745,9 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
     fn visit_constant_write_node(&mut self, node: &ruby_prism::ConstantWriteNode) {
         let value = node.value();
         if self.handle_dynamic_class_or_module(&node.as_node(), &value) {
+            return;
+        }
+        if self.defer_constant_assignment_call(&node.as_node(), &value) {
             return;
         }
 
@@ -1694,6 +1781,9 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
     fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode) {
         let value = node.value();
         if self.handle_dynamic_class_or_module(&node.as_node(), &value) {
+            return;
+        }
+        if self.defer_constant_assignment_call(&node.as_node(), &value) {
             return;
         }
 
@@ -1772,7 +1862,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 let offset = Offset::from_prism_location(&location);
                 let (comments, flags) = builder.find_comments_for(comment_offset);
 
-                builder.operations.push(Operation::DefineAttribute(op::DefineAttribute {
+                builder.push_operation(Operation::DefineAttribute(op::DefineAttribute {
                     kind,
                     str_id,
                     uri_id: builder.uri_id,
@@ -1855,7 +1945,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 };
 
                 let ref_str_id = self.intern_string(format!("{old_name}()"));
-                self.operations.push(Operation::ReferenceMethod(op::ReferenceMethod {
+                self.push_operation(Operation::ReferenceMethod(op::ReferenceMethod {
                     str_id: ref_str_id,
                     uri_id: self.uri_id,
                     offset: old_offset.clone(),
@@ -1865,7 +1955,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 let offset = Offset::from_prism_location(&node.location());
                 let (comments, flags) = self.find_comments_for(offset.start());
 
-                self.operations.push(Operation::AliasMethod(op::AliasMethod {
+                self.push_operation(Operation::AliasMethod(op::AliasMethod {
                     new_name_str_id,
                     old_name_str_id,
                     uri_id: self.uri_id,
@@ -1928,12 +2018,11 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 } else {
                     let last_visibility = self.visibility_stack.last_mut().unwrap();
                     *last_visibility = VisibilityModifier::new(visibility, false, offset);
-                    self.operations
-                        .push(Operation::SetDefaultVisibility(op::SetDefaultVisibility {
-                            visibility,
-                            uri_id: self.uri_id,
-                            offset: Offset::from_prism_location(&node.location()),
-                        }));
+                    self.push_operation(Operation::SetDefaultVisibility(op::SetDefaultVisibility {
+                        visibility,
+                        uri_id: self.uri_id,
+                        offset: Offset::from_prism_location(&node.location()),
+                    }));
                 }
             }
             "new" => {
@@ -2165,7 +2254,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
         let new_name_str_id = self.intern_string(new_name);
         let old_name_str_id = self.intern_string(old_name.clone());
 
-        self.operations.push(Operation::AliasMethod(op::AliasMethod {
+        self.push_operation(Operation::AliasMethod(op::AliasMethod {
             new_name_str_id,
             old_name_str_id,
             uri_id: self.uri_id,
@@ -2186,15 +2275,14 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
         let offset = Offset::from_prism_location(&node.location());
         let (comments, flags) = self.find_comments_for(offset.start());
 
-        self.operations
-            .push(Operation::AliasGlobalVariable(op::AliasGlobalVariable {
-                new_name_str_id,
-                old_name_str_id,
-                uri_id: self.uri_id,
-                offset,
-                comments,
-                flags,
-            }));
+        self.push_operation(Operation::AliasGlobalVariable(op::AliasGlobalVariable {
+            new_name_str_id,
+            old_name_str_id,
+            uri_id: self.uri_id,
+            offset,
+            comments,
+            flags,
+        }));
     }
 
     fn visit_and_node(&mut self, node: &ruby_prism::AndNode) {
@@ -2239,14 +2327,14 @@ mod tests {
 
     fn assert_operations(source: &str, expected: &str) {
         let result = build_operations(source);
-        let actual = printer::print_operations(&result.operations, &result.strings, &result.names, false);
+        let actual = printer::print_compiled_items(&result.items, &result.strings, &result.names, false);
         let expected = normalize_expected(expected);
         assert_eq!(actual, expected, "\n\nActual:\n{actual}\n\nExpected:\n{expected}\n");
     }
 
     fn assert_operations_with_references(source: &str, expected: &str) {
         let result = build_operations(source);
-        let actual = printer::print_operations(&result.operations, &result.strings, &result.names, true);
+        let actual = printer::print_compiled_items(&result.items, &result.strings, &result.names, true);
         let expected = normalize_expected(expected);
         assert_eq!(actual, expected, "\n\nActual:\n{actual}\n\nExpected:\n{expected}\n");
     }
@@ -2490,6 +2578,42 @@ mod tests {
             DefineConstant(FOO)
             EnterClass(Bar)
               DefineConstant(BAZ)
+            ExitScope
+            ",
+        );
+    }
+
+    #[test]
+    fn build_deferred_constant_assignment_call() {
+        assert_operations_with_references(
+            "
+            Foo = Candidate.new(:name, \"email\", Bar)
+            ",
+            "
+            DefineConstant(Foo)
+            ReferenceConstant(Candidate)
+            ReferenceConstant(Candidate::<Candidate>)
+            ReferenceConstant(Bar)
+            DeferredCall(Foo = Candidate.new(name, email, <unsupported>))
+            ReferenceMethod(new)
+            ",
+        );
+    }
+
+    #[test]
+    fn does_not_defer_calls_with_blocks() {
+        // Unsupported boundary: block forms are not deferred in this pass. They fall through
+        // to ordinary constant assignment; nested defs may attach to the wrong owner until
+        // deferred block replay exists.
+        assert_operations(
+            "
+            Foo = Candidate.new do
+              def bar; end
+            end
+            ",
+            "
+            DefineConstant(Foo)
+            EnterMethod(bar())
             ExitScope
             ",
         );

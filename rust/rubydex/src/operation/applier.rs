@@ -1,8 +1,8 @@
 //! Converts an `OperationBuilderResult` into a `LocalGraph` by walking operations and creating definitions.
 //!
 //! This is the second phase of the two-phase operation pipeline:
-//! 1. `RubyOperationBuilder` parses source → produces ordered operations
-//! 2. `apply_operations` walks operations → creates definitions in a `LocalGraph`
+//! 1. `RubyOperationBuilder` parses source → produces ordered compiled items
+//! 2. `apply_operations` applies semantic operations and stores deferred calls in a `LocalGraph`
 //!
 //! The applier maintains its own scope stack to derive `lexical_nesting_id` for definitions.
 //! Operations carry only their own data; scope context comes from Enter/Exit scope operations.
@@ -22,9 +22,10 @@ use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::visibility::Visibility;
 use crate::operation::ruby_builder::OperationBuilderResult;
 use crate::operation::{
-    AliasConstant, AliasGlobalVariable, AliasMethod, AttrKind, DefineAttribute, DefineClassVariable, DefineConstant,
-    DefineGlobalVariable, DefineInstanceVariable, EnterClass, EnterMethod, EnterModule, EnterSingletonClass, MixinKind,
-    Operation, ReferenceConstant, ReferenceMethod, SetConstantVisibility, SetMethodVisibility, Target,
+    AliasConstant, AliasGlobalVariable, AliasMethod, AttrKind, CompiledItem, DefineAttribute, DefineClassVariable,
+    DefineConstant, DefineGlobalVariable, DefineInstanceVariable, EnterClass, EnterMethod, EnterModule,
+    EnterSingletonClass, MixinKind, Operation, ReferenceConstant, ReferenceMethod, SetConstantVisibility,
+    SetMethodVisibility, Target,
 };
 
 enum ApplierScope {
@@ -483,7 +484,7 @@ pub fn apply_operations(result: OperationBuilderResult) -> LocalGraph {
     let OperationBuilderResult {
         uri_id,
         document,
-        operations,
+        items,
         strings,
         names,
     } = result;
@@ -493,6 +494,37 @@ pub fn apply_operations(result: OperationBuilderResult) -> LocalGraph {
         scope_stack: Vec::new(),
         scope_visibility: HashMap::new(),
         constant_ref_ids: HashMap::new(),
+    };
+
+    for item in items {
+        match item {
+            CompiledItem::Operation(op) => applier.apply_operation(op),
+            CompiledItem::DeferredCall(call) => applier.local_graph.add_deferred_call(call),
+        }
+    }
+
+    applier.local_graph
+}
+
+/// Applies additional semantic operations onto an existing `LocalGraph`.
+///
+/// Rebuilds the applier's `ReferenceConstant` lookup from references already present in the
+/// local graph so generated expansions can be replay-validated against the live stream.
+#[cfg(test)]
+pub(crate) fn apply_additional_operations(
+    local_graph: LocalGraph,
+    operations: impl IntoIterator<Item = Operation>,
+) -> LocalGraph {
+    let mut constant_ref_ids = HashMap::new();
+    for (ref_id, constant_ref) in local_graph.constant_references() {
+        constant_ref_ids.insert(*constant_ref.name_id(), *ref_id);
+    }
+
+    let mut applier = OperationApplier {
+        local_graph,
+        scope_stack: Vec::new(),
+        scope_visibility: HashMap::new(),
+        constant_ref_ids,
     };
 
     for op in operations {
