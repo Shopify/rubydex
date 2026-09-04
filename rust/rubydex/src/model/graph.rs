@@ -2090,14 +2090,14 @@ mod tests {
         let definitions = context.graph().get("CommentedClass").unwrap();
         let def = definitions.first().unwrap();
         assert_eq!(
-            def.comments().iter().map(Comment::string).collect::<Vec<&String>>(),
+            def.comments().iter().map(Comment::string).collect::<Vec<&str>>(),
             ["# This is a class comment", "# Multi-line comment"]
         );
 
         let definitions = context.graph().get("CommentedModule").unwrap();
         let def = definitions.first().unwrap();
         assert_eq!(
-            def.comments().iter().map(Comment::string).collect::<Vec<&String>>(),
+            def.comments().iter().map(Comment::string).collect::<Vec<&str>>(),
             ["# Module comment"]
         );
 
