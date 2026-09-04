@@ -1,6 +1,6 @@
 [package]
 name = "rubydex"
-version = "0.2.6"
+version.workspace = true
 edition = "2024"
 rust-version = "1.89.0"
 license = "MIT"

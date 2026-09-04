@@ -44,9 +44,9 @@ We try to be on the latest version of Rust and CI always runs against the latest
 
 ## Releasing
 
-Releases are cut by maintainers from `main`. The repository uses
-`shopify/cibuildgem` to build and publish precompiled gems, so do not run
-`rake release` locally.
+Releases are cut by maintainers from `main`. GitHub Actions builds and publishes
+precompiled gems to RubyGems and publishes the crates to crates.io. Do not run
+`rake release` or `cargo publish` locally.
 
 To cut a new release:
 
@@ -57,11 +57,22 @@ To cut a new release:
    git pull --ff-only
    ```
 
-2. Bump the gem version in `lib/rubydex/version.rb`.
+2. In `rust/Cargo.toml`, bump the version under `[workspace.package]` and in the `rubydex` dependency under `[workspace.dependencies]`:
 
-3. Refresh `Gemfile.lock` so the local `rubydex` spec version matches:
+   ```toml
+   [workspace.package]
+   version = "X.Y.Z"
+
+   [workspace.dependencies]
+   rubydex = { version = "=X.Y.Z", path = "rubydex" }
+   ```
+
+   The Ruby gem dynamically reads its version from this manifest, so do not edit `lib/rubydex/version.rb`. For pre-release versions, Cargo requires a SemVer prerelease identifier such as `X.Y.Z-beta.N`, which `lib/rubydex/version.rb` translates to `X.Y.Z.betaN` for RubyGems.
+
+3. Refresh both lockfiles so their recorded versions match:
 
    ```sh
+   cargo check --manifest-path rust/Cargo.toml
    bundle lock --local
    ```
 
@@ -79,7 +90,7 @@ To cut a new release:
 5. Commit the version bump directly on `main`:
 
    ```sh
-   git add lib/rubydex/version.rb Gemfile.lock
+   git add rust/Cargo.toml rust/Cargo.lock Gemfile.lock
    git commit -m "Bump version to vX.Y.Z"
    git push origin main
    ```
@@ -92,7 +103,8 @@ To cut a new release:
    ```
 
 Pushing a tag matching `vX.Y.Z` or `vX.Y.Z.betaN` triggers the release workflow
-in `.github/workflows/cibuildgem.yaml`. That workflow cross-compiles the
-precompiled gems, runs install verification, publishes to RubyGems, and creates
-the GitHub release. Workflow dispatch can be used for a dry run; only tag pushes
-publish a release.
+in `.github/workflows/release.yml`. That workflow verifies that the tag matches
+the declared version, cross-compiles the precompiled gems, runs install
+verification, publishes to RubyGems, publishes the workspace crates to
+crates.io, and creates the GitHub release. You can trigger a dry run with
+workflow dispatch; only tag pushes publish a release.

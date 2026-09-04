@@ -6,6 +6,12 @@ members = [
 
 resolver = "3"
 
+[workspace.package]
+version = "0.4.1"
+
+[workspace.dependencies]
+rubydex = { version = "=0.4.1", path = "rubydex" }
+
 [profile.release]
 lto = true
 opt-level = 3
