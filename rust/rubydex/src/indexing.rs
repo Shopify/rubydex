@@ -2,9 +2,13 @@ use crate::{
     errors::Errors,
     indexing::{local_graph::LocalGraph, rbs_indexer::RBSIndexer, ruby_indexer::RubyIndexer},
     job_queue::{Job, JobQueue},
-    model::graph::Graph,
-    operation::ruby_builder::RubyOperationBuilder,
+    model::{graph::Graph, ids::UriId},
+    operation::ruby_builder::{OperationBuilderResult, RubyOperationBuilder},
 };
+
+use crate::model::document::Document;
+use crate::model::identity_maps::IdentityHashMap;
+use crate::operation::{self as op, AttrKind, MixinKind, Operation, Target};
 use crossbeam_channel::{Sender, unbounded};
 use std::{ffi::OsStr, fs, path::PathBuf, sync::Arc};
 use url::Url;
@@ -173,6 +177,127 @@ pub fn build_local_graph(uri: Box<str>, source: &str, language: &LanguageId, bac
             indexer.local_graph()
         }
     }
+}
+
+/// Job that indexes a single file
+pub struct IndexingOperationsJob {
+    path: PathBuf,
+    backend: IndexerBackend,
+    operations_tx: Sender<OperationBuilderResult>,
+    errors_tx: Sender<Errors>,
+}
+
+impl IndexingOperationsJob {
+    #[must_use]
+    pub fn new(
+        path: PathBuf,
+        backend: IndexerBackend,
+        operations_tx: Sender<OperationBuilderResult>,
+        errors_tx: Sender<Errors>,
+    ) -> Self {
+        Self {
+            path,
+            backend,
+            operations_tx,
+            errors_tx,
+        }
+    }
+
+    fn send_error(&self, error: Errors) {
+        self.errors_tx
+            .send(error)
+            .expect("errors receiver dropped before run completion");
+    }
+}
+
+impl Job for IndexingOperationsJob {
+    fn run(&self) {
+        let Ok(source) = fs::read_to_string(&self.path) else {
+            self.send_error(Errors::FileError(format!(
+                "Failed to read file `{}`",
+                self.path.display()
+            )));
+
+            return;
+        };
+
+        let Ok(url) = Url::from_file_path(&self.path) else {
+            self.send_error(Errors::FileError(format!(
+                "Couldn't build URI from path `{}`",
+                self.path.display()
+            )));
+
+            return;
+        };
+
+        let language = self.path.extension().map_or(LanguageId::Ruby, LanguageId::from);
+        let result = build_operations(url.to_string().into(), &source, &language, self.backend);
+        self.operations_tx
+            .send(result)
+            .expect("operations receiver dropped before merge");
+    }
+}
+
+#[must_use]
+pub fn build_operations(
+    uri: Box<str>,
+    source: &str,
+    language: &LanguageId,
+    backend: IndexerBackend,
+) -> OperationBuilderResult {
+    match language {
+        LanguageId::Ruby => {
+            let builder = RubyOperationBuilder::new(uri, source);
+            return builder.build();
+        }
+        LanguageId::Rbs => OperationBuilderResult {
+            uri_id: UriId::from(uri.as_ref()),
+            document: Document::new(uri, source),
+            operations: vec![],
+            strings: IdentityHashMap::default(),
+            names: IdentityHashMap::default(),
+        },
+    }
+}
+
+/// Indexes the given paths, reading the content from disk and populating the given `Graph` instance.
+///
+/// # Panics
+///
+/// Will panic if the graph cannot be wrapped in an Arc<Mutex<>>
+pub fn index_files_operations(
+    operation_results: &mut Vec<OperationBuilderResult>,
+    paths: Vec<PathBuf>,
+    backend: IndexerBackend,
+) -> Vec<Errors> {
+    let queue = Arc::new(JobQueue::new());
+    let (operations_tx, operations_rx) = unbounded();
+    let (errors_tx, errors_rx) = unbounded();
+
+    for path in paths {
+        queue.push(Box::new(IndexingOperationsJob::new(
+            path,
+            backend,
+            operations_tx.clone(),
+            errors_tx.clone(),
+        )));
+    }
+
+    drop(operations_tx);
+    drop(errors_tx);
+
+    let handles = JobQueue::run_without_waiting(&queue);
+
+    // Merge graphs as they arrive, overlapping with indexing work on other threads.
+    while let Ok(operation_result) = operations_rx.recv() {
+        operation_results.push(operation_result);
+    }
+
+    for handle in handles {
+        handle.join().expect("Worker thread panicked");
+    }
+
+    errors_rx.iter().collect()
 }
 
 #[cfg(test)]

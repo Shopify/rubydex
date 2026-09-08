@@ -1,5 +1,5 @@
 name: rubydex
-nix: true
+nix: false
 up:
   - ruby
   - bundler

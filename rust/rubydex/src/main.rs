@@ -7,6 +7,7 @@ use rubydex::{
     indexing::{self, IndexerBackend},
     integrity, listing,
     model::graph::Graph,
+    operation_resolver::OperationsResolver,
     resolution::Resolver,
     stats::{
         memory::MemoryStats,
@@ -39,6 +40,9 @@ struct Args {
 
     #[arg(long = "check-integrity", help = "Check the integrity of the graph after resolution")]
     check_integrity: bool,
+
+    #[arg(long = "proto", help = "Run our proto")]
+    proto: bool,
 
     #[arg(
         long = "indexer",
@@ -126,6 +130,18 @@ fn main() {
 
     if let Some(StopAfter::Listing) = args.stop_after {
         return exit(args.stats);
+    }
+
+    if args.proto {
+        let mut operation_results = Vec::new();
+        indexing::index_files_operations(&mut operation_results, file_paths, IndexerBackend::OperationBuilder);
+        let mut resolver = OperationsResolver::new(&mut graph, &operation_results);
+        resolver.resolve();
+        println!("Indexed {} files", graph.documents().len());
+        println!("Found {} names", graph.declarations().len());
+        println!("Found {} definitions", graph.definitions().len());
+        println!("Found {} URIs", graph.documents().len());
+        return exit(true);
     }
 
     // Indexing
