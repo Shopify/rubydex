@@ -6,7 +6,12 @@ use rubydex::{
     dot,
     indexing::{self, IndexerBackend},
     integrity, listing,
-    model::graph::Graph,
+    model::{
+        definitions::Definition,
+        graph::Graph,
+        ids::NameId,
+        name::{NameRef::Unresolved, ParentScope},
+    },
     operation_resolver::OperationsResolver,
     resolution::Resolver,
     stats::{
@@ -99,6 +104,40 @@ fn workspace_path_for(paths: &[String]) -> Option<PathBuf> {
     fs::canonicalize(first_path).ok().filter(|path| path.is_dir())
 }
 
+fn pretty_print_def(graph: &Graph, def: &Definition) {
+    match def {
+        Definition::Module(module_def) => {
+            pretty_print_name(graph, *module_def.name_id());
+            println!();
+        }
+        Definition::Class(class_def) => {
+            pretty_print_name(graph, *class_def.name_id());
+            println!();
+        }
+        _ => {
+            panic!("Unexpected definition type: {:?}", def)
+        }
+    }
+}
+
+fn pretty_print_name(graph: &Graph, name_id: NameId) {
+    let name_ref = graph.names().get(&name_id);
+    match &name_ref {
+        Some(Unresolved(unresolved_name)) => {
+            let parent_scope = unresolved_name.parent_scope();
+            if let ParentScope::Some(parent_scope_name_id) = parent_scope {
+                pretty_print_name(graph, *parent_scope_name_id);
+            }
+            if let Some(name_id) = unresolved_name.nesting() {
+                pretty_print_name(graph, *name_id);
+            }
+            print!("::{}", graph.strings().get(unresolved_name.str()).unwrap().as_str());
+        }
+        None => println!("No name for {:?}", name_id),
+        _ => println!("Name is resolved"),
+    }
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -141,6 +180,15 @@ fn main() {
         println!("Found {} names", graph.declarations().len());
         println!("Found {} definitions", graph.definitions().len());
         println!("Found {} URIs", graph.documents().len());
+
+        // graph.documents().iter().for_each(|(doc_id, doc)| {
+        //     println!("{:?}", doc.uri());
+        // });
+
+        graph.definitions().iter().for_each(|(def_id, def)| {
+            pretty_print_def(&graph, def);
+        });
+
         return exit(true);
     }
 

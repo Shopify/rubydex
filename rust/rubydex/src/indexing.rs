@@ -248,7 +248,7 @@ pub fn build_operations(
     match language {
         LanguageId::Ruby => {
             let builder = RubyOperationBuilder::new(uri, source);
-            return builder.build();
+            builder.build()
         }
         LanguageId::Rbs => OperationBuilderResult {
             uri_id: UriId::from(uri.as_ref()),

@@ -151,6 +151,12 @@ impl Graph {
         self.config = config.clone();
     }
 
+    pub fn add_definition(&mut self, definition: Definition) -> DefinitionId {
+        let definition_id = definition.id();
+        self.definitions.insert(definition_id, definition);
+        definition_id
+    }
+
     /// # Panics
     ///
     /// Will panic if the `definition_id` is not registered in the graph
@@ -545,6 +551,14 @@ impl Graph {
         }
 
         name_id
+    }
+
+    pub fn insert_name(&mut self, name_id: NameId, name_ref: NameRef) {
+        self.names.insert(name_id, name_ref);
+    }
+
+    pub fn insert_string(&mut self, string_id: StringId, string_ref: StringRef) {
+        self.strings.insert(string_id, string_ref);
     }
 
     #[must_use]

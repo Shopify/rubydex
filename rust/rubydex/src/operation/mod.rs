@@ -42,7 +42,7 @@ use crate::offset::Offset;
 ///
 /// Operations are produced by the builder in the order they appear in the source file.
 /// Scope context is established by Enter/Exit operations rather than carried on each variant.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Operation {
     /// Enter a class scope (`class Foo` or `Class.new`).
     EnterClass(EnterClass),
@@ -114,7 +114,7 @@ pub enum MixinKind {
     Extend,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EnterClass {
     pub name_id: NameId,
     pub uri_id: UriId,
@@ -126,7 +126,7 @@ pub struct EnterClass {
     pub is_lexical_scope: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EnterModule {
     pub name_id: NameId,
     pub uri_id: UriId,
@@ -137,7 +137,7 @@ pub struct EnterModule {
     pub is_lexical_scope: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EnterSingletonClass {
     pub name_id: NameId,
     pub uri_id: UriId,
@@ -147,7 +147,7 @@ pub struct EnterSingletonClass {
     pub flags: DefinitionFlags,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EnterMethod {
     pub str_id: StringId,
     pub uri_id: UriId,
@@ -159,7 +159,7 @@ pub struct EnterMethod {
     pub receiver: Option<Target>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AliasMethod {
     pub new_name_str_id: StringId,
     pub old_name_str_id: StringId,
@@ -170,7 +170,7 @@ pub struct AliasMethod {
     pub receiver: Option<Target>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SetMethodVisibility {
     pub str_id: StringId,
     pub visibility: Visibility,
@@ -179,14 +179,14 @@ pub struct SetMethodVisibility {
     pub flags: DefinitionFlags,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SetDefaultVisibility {
     pub visibility: Visibility,
     pub uri_id: UriId,
     pub offset: Offset,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DefineConstant {
     pub name_id: NameId,
     pub uri_id: UriId,
@@ -195,7 +195,7 @@ pub struct DefineConstant {
     pub flags: DefinitionFlags,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AliasConstant {
     pub name_id: NameId,
     pub target_name_id: NameId,
@@ -205,7 +205,7 @@ pub struct AliasConstant {
     pub flags: DefinitionFlags,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SetConstantVisibility {
     pub receiver: Option<Target>,
     pub target: StringId,
@@ -216,13 +216,13 @@ pub struct SetConstantVisibility {
     pub flags: DefinitionFlags,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Mixin {
     pub kind: MixinKind,
     pub target: Target,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DefineAttribute {
     pub kind: AttrKind,
     pub str_id: StringId,
@@ -232,7 +232,7 @@ pub struct DefineAttribute {
     pub flags: DefinitionFlags,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DefineGlobalVariable {
     pub str_id: StringId,
     pub uri_id: UriId,
@@ -241,7 +241,7 @@ pub struct DefineGlobalVariable {
     pub flags: DefinitionFlags,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DefineInstanceVariable {
     pub str_id: StringId,
     pub uri_id: UriId,
@@ -250,7 +250,7 @@ pub struct DefineInstanceVariable {
     pub flags: DefinitionFlags,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DefineClassVariable {
     pub str_id: StringId,
     pub uri_id: UriId,
@@ -259,7 +259,7 @@ pub struct DefineClassVariable {
     pub flags: DefinitionFlags,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AliasGlobalVariable {
     pub new_name_str_id: StringId,
     pub old_name_str_id: StringId,
@@ -269,14 +269,14 @@ pub struct AliasGlobalVariable {
     pub flags: DefinitionFlags,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ReferenceConstant {
     pub name_id: NameId,
     pub uri_id: UriId,
     pub offset: Offset,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ReferenceMethod {
     pub str_id: StringId,
     pub uri_id: UriId,
