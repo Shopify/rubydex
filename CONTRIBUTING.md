@@ -44,9 +44,9 @@ We try to be on the latest version of Rust and CI always runs against the latest
 
 ## Releasing
 
-Releases are cut by maintainers from `main`. The repository uses
-`shopify/cibuildgem` to build and publish precompiled gems, so do not run
-`rake release` locally.
+Releases are cut by maintainers from `main`. GitHub Actions builds and publishes
+precompiled gems to RubyGems and publishes the crates to crates.io. Do not run
+`rake release` or `cargo publish` locally.
 
 To cut a new release:
 
@@ -57,15 +57,33 @@ To cut a new release:
    git pull --ff-only
    ```
 
-2. Bump the gem version in `lib/rubydex/version.rb`.
+2. Set the release version in `rust/Cargo.toml`. Both Rust crates inherit this
+   value:
 
-3. Refresh `Gemfile.lock` so the local `rubydex` spec version matches:
+   ```toml
+   [workspace.package]
+   version = "X.Y.Z"
+   ```
+
+   For a beta release, use `X.Y.Z-beta.N` in this file.
+
+3. Run the synchronization task to update `lib/rubydex/version.rb` and the
+   `rubydex` dependency version in `rust/rubydex-sys/Cargo.toml`. Do not edit
+   those versions manually:
 
    ```sh
+   bundle exec rake sync_versions
+   ```
+
+4. Refresh `rust/Cargo.lock` and `Gemfile.lock` to record the new crate and gem
+   versions:
+
+   ```sh
+   cargo check --manifest-path rust/Cargo.toml
    bundle lock --local
    ```
 
-4. Run the local validation suite:
+5. Run the local validation suite:
 
    ```sh
    bundle exec rake check
@@ -76,23 +94,26 @@ To cut a new release:
    path for the precompiled native extension, the `rubydex_mcp` binary, and
    bundled third-party license output.
 
-5. Commit the version bump directly on `main`:
+6. Commit the version bump directly on `main`:
 
    ```sh
-   git add lib/rubydex/version.rb Gemfile.lock
+   git add lib/rubydex/version.rb rust/Cargo.toml rust/rubydex-sys/Cargo.toml rust/Cargo.lock Gemfile.lock
    git commit -m "Bump version to vX.Y.Z"
    git push origin main
    ```
 
-6. Tag the same commit and push the tag:
+7. Tag the same commit using `v` followed by the generated Ruby version, then
+   push the tag:
 
    ```sh
    git tag vX.Y.Z
    git push origin vX.Y.Z
    ```
 
+   For example, Cargo version `1.2.3-beta.1` generates Ruby version
+   `1.2.3.beta1`. Use `v1.2.3.beta1` in both tag commands for that release.
+
 Pushing a tag matching `vX.Y.Z` or `vX.Y.Z.betaN` triggers the release workflow
-in `.github/workflows/cibuildgem.yaml`. That workflow cross-compiles the
-precompiled gems, runs install verification, publishes to RubyGems, and creates
-the GitHub release. Workflow dispatch can be used for a dry run; only tag pushes
+in `.github/workflows/release.yml`, which publishes the gem to RubyGems and the
+crates to crates.io. Workflow dispatch can be used for a dry run; only tag pushes
 publish a release.
