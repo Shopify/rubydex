@@ -17,8 +17,9 @@ graph = Rubydex::Graph.new
 graph.encoding = "utf16"
 # Index the entire workspace with all dependencies
 graph.index_workspace
-# Or index specific file paths
-graph.index_all(["path/to/file.rb"])
+# Or index specific file paths. Include the core and standard library RBS definition paths, otherwise the graph
+# will have no definitions for Ruby's own core classes
+graph.index_all(["path/to/file.rb", *Rubydex::Graph.core_rbs_definition_paths])
 # Transform the initially collected information into its semantic understanding by running resolution
 graph.resolve
 # Get all diagnostics acquired during the analysis

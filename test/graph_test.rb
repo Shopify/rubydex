@@ -2,6 +2,7 @@
 
 require "test_helper"
 require "helpers/context"
+require "mocha/minitest"
 require "json"
 
 class GraphTest < Minitest::Test
@@ -890,6 +891,53 @@ class GraphTest < Minitest::Test
       end
 
       assert_equal(paths.length, paths.uniq.length)
+    end
+  end
+
+  def test_core_rbs_definition_paths
+    paths = Rubydex::Graph.core_rbs_definition_paths
+    core_path, stdlib_path = paths
+
+    assert_equal(2, paths.length)
+    assert_equal("core", File.basename(core_path))
+    assert_equal("stdlib", File.basename(stdlib_path))
+    assert_equal(File.dirname(core_path), File.dirname(stdlib_path))
+    assert_match(/rbs-[0-9]/, File.basename(File.dirname(core_path)))
+    assert(File.directory?(core_path), "Expected `#{core_path}` to be a directory")
+    assert(File.directory?(stdlib_path), "Expected `#{stdlib_path}` to be a directory")
+  end
+
+  def test_core_rbs_definition_paths_uses_the_latest_installation
+    with_context do |context|
+      ["rbs-3.9.4", "rbs-3.10.0", "rbs-3.10.0.pre.1", "rbs-inline-0.11.0"].each do |gem_directory|
+        context.write!("gems/#{gem_directory}/core/object.rbs", "class Object; end")
+        context.write!("gems/#{gem_directory}/stdlib/set/0/set.rbs", "class Set; end")
+      end
+
+      Gem.stubs(:path).returns([context.absolute_path])
+
+      assert_equal(
+        [context.absolute_path_to("gems/rbs-3.10.0/core"), context.absolute_path_to("gems/rbs-3.10.0/stdlib")],
+        Rubydex::Graph.core_rbs_definition_paths,
+      )
+    end
+  end
+
+  def test_core_rbs_definition_paths_without_an_rbs_installation
+    with_context do |context|
+      Gem.stubs(:path).returns([context.absolute_path])
+
+      assert_empty(Rubydex::Graph.core_rbs_definition_paths)
+    end
+  end
+
+  def test_workspace_paths_include_the_core_rbs_definition_paths
+    with_context do |context|
+      paths = graph_for(context).workspace_paths
+
+      Rubydex::Graph.core_rbs_definition_paths.each do |rbs_path|
+        assert_includes(paths, rbs_path)
+      end
     end
   end
 

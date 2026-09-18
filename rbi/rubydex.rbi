@@ -730,6 +730,16 @@ class Rubydex::Graph
     # different tools, do not use this. Create and own a `Config` object instead.
     sig { params(workspace_path: String).returns(T.attached_class) }
     def configure_for_workspace(workspace_path); end
+
+    # Returns the paths for the core and standard library RBS definitions of the latest installation of the `rbs` gem,
+    # which are the definitions for Ruby itself. Tools that build their own list of paths and index it with
+    # `index_all` must append these paths, otherwise the graph will have no definitions for core classes like `Object`
+    # or `Kernel`.
+    #
+    # This method does not require `rbs` to be a part of the bundle. It searches for whatever latest installation of
+    # `rbs` exists in the system and returns an empty array if we can't find one
+    sig { returns(T::Array[String]) }
+    def core_rbs_definition_paths; end
   end
 
   sig { params(fully_qualified_name: String).returns(T.nilable(Rubydex::Declaration)) }
