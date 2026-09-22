@@ -1,11 +1,9 @@
-use std::default;
-
 use crate::model::graph::Graph;
 
 use crate::model::definitions::{ClassDefinition, Definition, ModuleDefinition};
-use crate::model::ids::{DefinitionId, NameId};
+use crate::model::ids::DefinitionId;
 use crate::operation::Operation;
-use crate::operation::ruby_builder::{OperationBuilderResult, RubyOperationBuilder};
+use crate::operation::ruby_builder::OperationBuilderResult;
 
 #[derive(Clone, Copy)]
 enum Nesting {
@@ -40,14 +38,14 @@ impl<'a> OperationsResolver<'a> {
     }
     fn handle_operation(&mut self, operation_result: &OperationBuilderResult, operation: Operation) {
         match operation {
+            Operation::EnterClass(enter_class) => {
+                self.handle_enter_class(operation_result, enter_class);
+            }
             Operation::EnterModule(enter_module) => {
                 self.handle_enter_module(operation_result, enter_module);
             }
             Operation::ExitScope => {
                 self.handle_exit_scope();
-            }
-            Operation::EnterClass(enter_class) => {
-                self.handle_enter_class(operation_result, enter_class);
             }
 
             _ => {}
@@ -59,7 +57,7 @@ impl<'a> OperationsResolver<'a> {
         operation_result: &OperationBuilderResult,
         operation: crate::operation::EnterModule,
     ) {
-        println!("Handling EnterModule: {:?}", operation);
+        println!("Handling EnterModule: {operation:?}");
 
         // Create the definition
         let def = ModuleDefinition::new(
@@ -90,7 +88,7 @@ impl<'a> OperationsResolver<'a> {
         operation_result: &OperationBuilderResult,
         operation: crate::operation::EnterClass,
     ) {
-        println!("Handling EnterClass: {:?}", operation);
+        println!("Handling EnterClass: {operation:?}");
 
         // Create the definition
         let def = ClassDefinition::new(
@@ -119,6 +117,8 @@ impl<'a> OperationsResolver<'a> {
         });
 
         self.graph.add_definition(Definition::Class(Box::new(def)));
+
+        // TODO: let's try to create a delcaration with the knowledge that we have right now
     }
 
     fn handle_exit_scope(&mut self) {

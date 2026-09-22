@@ -8,7 +8,6 @@ use crate::{
 
 use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
-use crate::operation::{self as op, AttrKind, MixinKind, Operation, Target};
 use crossbeam_channel::{Sender, unbounded};
 use std::{ffi::OsStr, fs, path::PathBuf, sync::Arc};
 use url::Url;
@@ -243,7 +242,7 @@ pub fn build_operations(
     uri: Box<str>,
     source: &str,
     language: &LanguageId,
-    backend: IndexerBackend,
+    _backend: IndexerBackend,
 ) -> OperationBuilderResult {
     match language {
         LanguageId::Ruby => {

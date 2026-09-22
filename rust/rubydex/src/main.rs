@@ -115,7 +115,7 @@ fn pretty_print_def(graph: &Graph, def: &Definition) {
             println!();
         }
         _ => {
-            panic!("Unexpected definition type: {:?}", def)
+            panic!("Unexpected definition type: {def:?}")
         }
     }
 }
@@ -133,7 +133,7 @@ fn pretty_print_name(graph: &Graph, name_id: NameId) {
             }
             print!("::{}", graph.strings().get(unresolved_name.str()).unwrap().as_str());
         }
-        None => println!("No name for {:?}", name_id),
+        None => println!("No name for {name_id:?}"),
         _ => println!("Name is resolved"),
     }
 }
@@ -185,7 +185,7 @@ fn main() {
         //     println!("{:?}", doc.uri());
         // });
 
-        graph.definitions().iter().for_each(|(def_id, def)| {
+        graph.definitions().iter().for_each(|(_def_id, def)| {
             pretty_print_def(&graph, def);
         });
 
