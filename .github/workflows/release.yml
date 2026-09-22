@@ -14,15 +14,28 @@ permissions:
 jobs:
   verify_version:
     timeout-minutes: 5
-    name: "Verify the tag matches the declared version"
+    name: "Verify release versions"
     runs-on: "ubuntu-latest"
     steps:
       - name: "Checkout code"
         uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      - name: "Setup Rust"
+        run: |
+          rustup update --no-self-update stable
+          rustup default stable
       - name: "Setup Ruby"
         uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
         with:
-          ruby-version: "3.2.9"
+          bundler-cache: true
+      - name: Check versions are in sync
+        run: |
+          bundle exec rake sync_versions
+          changes=$(git status --porcelain lib/rubydex/version.rb rust/rubydex-sys/Cargo.toml)
+          if [ -n "$changes" ]; then
+            echo "$changes"
+            echo "Versions are out of sync. Run \`bundle exec rake sync_versions\` and commit the result."
+            exit 1
+          fi
       - name: "Verify the tag matches the declared version"
         if: startsWith(github.ref, 'refs/tags/')
         run: |
