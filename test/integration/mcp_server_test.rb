@@ -74,6 +74,8 @@ class MCPServerIntegrationTest < Minitest::Test
   def test_mcp_server_e2e
     with_context do |context|
       context.write!("app.rb", "class Dog; end")
+      context.write!("lib/unused.rb", "class OtherCandidate; end")
+      context.write!("rubydex.toml", "[dead-code]\nexclude = [\"lib/**\"]\n")
 
       stderr_output = +""
       Open3.popen3(RbConfig.ruby, "-rbundler/setup", executable_path, "mcp", context.absolute_path) do |stdin, stdout, stderr, wait_thr|
@@ -93,6 +95,31 @@ class MCPServerIntegrationTest < Minitest::Test
 
         search_response = call_tool(stdin, stdout, request_id + 1, "search_declarations", { query: "Dog", match_mode: "exact" })
         assert_equal(["Dog"], search_response.fetch("results").map { |result| result.fetch("name") })
+
+        dead_code_response = call_tool(stdin, stdout, request_id + 2, "find_dead_code_candidates", { path: "app.rb" })
+        assert_equal(
+          {
+            "candidates" => [
+              { "name" => "Dog", "kind" => "Class", "locations" => [{ "path" => "app.rb", "line" => 1, "column" => 7 }] },
+            ],
+            "total" => 1,
+          },
+          dead_code_response,
+        )
+
+        unfiltered_response = call_tool(stdin, stdout, request_id + 3, "find_dead_code_candidates", {})
+        assert_equal(dead_code_response, unfiltered_response)
+
+        excluded_declaration = call_tool(stdin, stdout, request_id + 4, "get_declaration", { name: "OtherCandidate" })
+        assert_equal("OtherCandidate", excluded_declaration.fetch("name"))
+        assert_equal(
+          [{ "path" => "lib/unused.rb", "line" => 1, "comments" => [] }],
+          excluded_declaration.fetch("definitions"),
+        )
+
+        context.write!("rubydex.toml", "[dead-code]\nexclude = []\n")
+        after_config_change = call_tool(stdin, stdout, request_id + 5, "find_dead_code_candidates", {})
+        assert_equal(dead_code_response, after_config_change, "A running MCP server should retain its loaded configuration")
 
         stdin.close
         Timeout.timeout(30) { wait_thr.value }
@@ -184,6 +211,7 @@ class MCPServerIntegrationTest < Minitest::Test
       [
         "codebase_stats",
         "find_constant_references",
+        "find_dead_code_candidates",
         "get_declaration",
         "get_descendants",
         "get_file_declarations",

@@ -153,6 +153,55 @@ puts result.render("json")
 puts Rubydex::Query.schema("table")
 ```
 
+### Dead code candidates
+
+Find potentially unused classes, modules, and constants in the current workspace:
+
+```bash
+bundle exec rdx dead-code
+bundle exec rdx dead-code --format json
+bundle exec rdx dead-code --path 'app/services/**'
+bundle exec rdx dead-code --path 'app/services/**' --fail-on-candidates
+```
+
+The default table shows each candidate's name, kind, and definition locations. JSON output contains
+`candidates` and `total`; each candidate has `name`, `kind`, and `locations` with workspace-relative
+`path`, one-based `line`, and one-based `column`. Candidates are sorted by name, and locations point
+to the declared identifier where available.
+
+The workspace is the Bundler project root, or the current directory when there is no Gemfile.
+Dependencies are indexed to find references, but their definitions are omitted from the report,
+including gems installed under the workspace. Progress is written to stderr, keeping stdout usable
+for JSON consumers. By default, finding candidates does not make the command exit with an error.
+
+Use `--path` to report only definitions matching a workspace-relative file path or glob. Use forward
+slashes and quote globs so the shell passes them through: `*` matches within one directory, while
+`**/` matches recursively and a trailing `/**` includes all descendants. The whole workspace is still
+analyzed, so references outside the selected path count. Only matching definition locations are
+shown, and `total` counts the filtered candidates.
+
+Use `--fail-on-candidates` in CI to exit with status 1 when the report contains candidates, or 0 when
+it is empty. This respects `--path` and prints the normal table or JSON report before exiting.
+
+Configure persistent exclusions in the workspace's `rubydex.toml`:
+
+```toml
+[dead-code]
+exclude = ["test/**", "app/generated/**", "lib/public_api.rb"]
+```
+
+Exclusions use the same workspace-relative file/glob matching as `--path` and apply to both the CLI
+and MCP tool. Excluded files are still indexed and their references still count. Only matching
+definition locations are hidden; a candidate remains in the report if it has another location that
+passes the filters. Exclusions take precedence over `--path` and apply before totals, pagination,
+and `--fail-on-candidates` are calculated. Omitting the section or using `exclude = []` excludes
+nothing from the report. The MCP server loads this configuration at startup; restart it after
+changing the file.
+
+These are candidates for review, not proof that code is safe to delete. The current analysis finds
+constants with no detected references, including classes and modules; methods and variables are not
+supported. Dynamic references may be missed, and references from other unused code still count.
+
 ### Linter
 
 See the [linter docs](docs/linter.md).
@@ -198,8 +247,18 @@ like Claude to semantically query your Ruby codebase.
 | `get_declaration` | Full details by fully qualified name with docs, ancestors, members |
 | `get_descendants` | What classes/modules inherit from or include this one |
 | `find_constant_references` | All precise, resolved constant references across the codebase |
+| `find_dead_code_candidates` | Potentially unused workspace classes, modules, and constants, with definition locations |
 | `get_file_declarations` | List declarations defined in a specific file |
 | `codebase_stats` | High-level statistics about the indexed codebase |
+
+`find_dead_code_candidates` returns the same candidate records as `rdx dead-code --format json`.
+It accepts an optional `path` with the same file/glob matching as the CLI, plus `limit` (default 50,
+maximum 100) and `offset` (default 0). Filtering happens before pagination. The response includes
+`candidates` for the requested page and `total` for all candidates matching the filter. For example:
+
+```json
+{"name":"find_dead_code_candidates","arguments":{"path":"app/services/**","limit":10}}
+```
 
 ## Skill Library (Experimental)
 

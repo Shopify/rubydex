@@ -89,6 +89,119 @@ class MCPServerToolsTest < Minitest::Test
     end
   end
 
+  def test_find_dead_code_candidates_tool
+    with_context do |context|
+      context.write!("app.rb", <<~RUBY)
+        # Candidate locations point to the name of each declaration.
+        module Zed; end
+        UNUSED = 1
+          class Alpha
+            def unused_method; end
+          end
+        class Used; end
+      RUBY
+
+      with_context do |dependency|
+        dependency.write!("dependency.rb", "class Outside; end\nUsed")
+        graph, errors = indexed_graph(context.absolute_path, [context.absolute_path, dependency.absolute_path])
+
+        assert_empty(errors)
+
+        result = call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool)
+
+        assert_equal(3, result.fetch("total"))
+        assert_equal(
+          [
+            { "name" => "Alpha", "kind" => "Class", "locations" => [{ "path" => "app.rb", "line" => 4, "column" => 9 }] },
+            { "name" => "UNUSED", "kind" => "Constant", "locations" => [{ "path" => "app.rb", "line" => 3, "column" => 1 }] },
+            { "name" => "Zed", "kind" => "Module", "locations" => [{ "path" => "app.rb", "line" => 2, "column" => 8 }] },
+          ],
+          result.fetch("candidates"),
+        )
+
+        pages = 3.times.flat_map do |offset|
+          page = call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool, limit: 1, offset: offset)
+
+          assert_equal(3, page.fetch("total"))
+          page.fetch("candidates")
+        end
+
+        assert_equal(result.fetch("candidates"), pages)
+
+        beyond = call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool, limit: 1, offset: 3)
+
+        assert_equal(3, beyond.fetch("total"))
+        assert_empty(beyond.fetch("candidates"))
+      end
+    end
+  end
+
+  def test_find_dead_code_candidates_tool_with_no_candidates
+    with_context do |context|
+      context.write!("app.rb", "class Used; end\nUsed")
+      graph, errors = indexed_graph(context.absolute_path, [context.absolute_path])
+
+      assert_empty(errors)
+      assert_equal(
+        { "candidates" => [], "total" => 0 },
+        call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool),
+      )
+    end
+  end
+
+  def test_find_dead_code_candidates_tool_limits_pages
+    with_context do |context|
+      names = 105.times.map { |index| format("Unused%03d", index) }
+      context.write!("app.rb", names.reverse.map { |name| "class #{name}; end" }.join("\n"))
+      graph, errors = indexed_graph(context.absolute_path, [context.absolute_path])
+
+      assert_empty(errors)
+
+      default_page = call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool)
+
+      assert_equal(105, default_page.fetch("total"))
+      assert_equal(names.first(50), default_page.fetch("candidates").map { |candidate| candidate.fetch("name") })
+
+      capped_page = call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool, limit: 200)
+
+      assert_equal(105, capped_page.fetch("total"))
+      assert_equal(names.first(100), capped_page.fetch("candidates").map { |candidate| candidate.fetch("name") })
+    end
+  end
+
+  def test_find_dead_code_candidates_tool_filters_paths_before_pagination
+    with_context do |context|
+      context.write!("lib/other.rb", "class Alpha; end\nclass Bravo; end\nUsed")
+      context.write!("app/models.rb", "class Bravo; end\nclass Zed; end\nclass Used; end")
+      context.write!("app/nested/model.rb", "class Delta; end")
+      graph, errors = indexed_graph(context.absolute_path, [context.absolute_path])
+
+      assert_empty(errors)
+
+      page = call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool, path: "app/**", limit: 1, offset: 1)
+
+      assert_equal(3, page.fetch("total"))
+      assert_equal(
+        [{ "name" => "Delta", "kind" => "Class", "locations" => [{ "path" => "app/nested/model.rb", "line" => 1, "column" => 7 }] }],
+        page.fetch("candidates"),
+      )
+
+      file = call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool, path: "app/models.rb")
+
+      assert_equal(2, file.fetch("total"))
+      assert_equal(["Bravo", "Zed"], file.fetch("candidates").map { |candidate| candidate.fetch("name") })
+      assert_equal(
+        [{ "path" => "app/models.rb", "line" => 1, "column" => 7 }],
+        file.fetch("candidates").first.fetch("locations"),
+      )
+
+      assert_equal(
+        { "candidates" => [], "total" => 0 },
+        call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool, path: "missing/**/*.rb"),
+      )
+    end
+  end
+
   def test_get_file_declarations_tool
     with_graph do |graph|
       file = call_tool(graph, Rubydex::MCPServer::GetFileDeclarationsTool, file_path: "app.rb")
@@ -102,6 +215,26 @@ class MCPServerToolsTest < Minitest::Test
       missing = call_tool(graph, Rubydex::MCPServer::GetFileDeclarationsTool, file_path: "missing.rb")
 
       assert_equal("not_found", missing.fetch("error"))
+    end
+  end
+
+  def test_find_dead_code_candidates_tool_applies_config_exclusions_before_pagination
+    with_context do |context|
+      context.write!("rubydex.toml", "[dead-code]\nexclude = [\"app/generated/**\"]\n")
+      context.write!("app/models.rb", "class Kept; end\nclass Zed; end\nclass Used; end\n")
+      context.write!("app/generated/models.rb", "class Hidden; end\nUsed.new\n")
+      graph, errors = indexed_graph(context.absolute_path, [context.absolute_path])
+
+      assert_empty(errors)
+
+      page = call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool, path: "app/**", limit: 1, offset: 1)
+
+      assert_equal(2, page.fetch("total"))
+      assert_equal(["Zed"], page.fetch("candidates").map { |candidate| candidate.fetch("name") })
+      assert_equal(
+        { "candidates" => [], "total" => 0 },
+        call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool, path: "app/generated/**"),
+      )
     end
   end
 

@@ -64,6 +64,50 @@ class MCPServerTest < Minitest::Test
     assert_match(/retry/, payload.fetch("suggestion"))
   end
 
+  def test_tools_list_includes_find_dead_code_candidates
+    server = Rubydex::MCPServer::Server.new(root_path: Dir.pwd)
+    response = server.handle(jsonrpc: "2.0", id: 1, method: "tools/list")
+    tool = response.fetch(:result).fetch(:tools).find { |entry| entry.fetch(:name) == "find_dead_code_candidates" }
+
+    refute_nil(tool)
+    assert_match(/no detected references/, tool.fetch(:description))
+    assert_match(/not proof/, tool.fetch(:description))
+    assert_equal([:path, :limit, :offset], tool.fetch(:inputSchema).fetch(:properties).keys)
+    assert_equal("string", tool.fetch(:inputSchema).fetch(:properties).fetch(:path).fetch(:type))
+    assert_empty(tool.fetch(:inputSchema).fetch(:required, []))
+  end
+
+  def test_find_dead_code_candidates_returns_paginated_results
+    with_context do |context|
+      context.write!("app.rb", "class Zed; end\nclass Alpha; end")
+      graph = Rubydex::Graph.configure_for_workspace(context.absolute_path)
+
+      assert_empty(graph.index_all([context.absolute_path]))
+      graph.resolve
+
+      server = Rubydex::MCPServer::Server.new(root_path: context.absolute_path)
+      server.stubs(:graph_or_error).returns(graph)
+      response = server.handle(
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "find_dead_code_candidates",
+          arguments: { "limit" => 1, "offset" => 1 },
+        },
+      )
+      result = response.fetch(:result)
+      payload = JSON.parse(result.fetch(:content)[0].fetch(:text))
+
+      assert_equal(false, result.fetch(:isError))
+      assert_equal(2, payload.fetch("total"))
+      assert_equal(
+        [{ "name" => "Zed", "kind" => "Class", "locations" => [{ "path" => "app.rb", "line" => 1, "column" => 7 }] }],
+        payload.fetch("candidates"),
+      )
+    end
+  end
+
   def test_ping_returns_empty_result
     server = Rubydex::MCPServer::Server.new(root_path: Dir.pwd)
 
