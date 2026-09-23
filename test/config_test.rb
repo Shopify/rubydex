@@ -11,6 +11,7 @@ class ConfigTest < Minitest::Test
       config = Rubydex::Config.load(context.absolute_path)
       assert_equal(context.absolute_path, config.workspace_path)
       assert_empty(config.linter.rules)
+      assert_empty(config.dead_code.exclude_patterns)
     end
   end
 
@@ -62,6 +63,117 @@ class ConfigTest < Minitest::Test
 
   def test_load_raises_when_the_path_is_not_a_string
     assert_raises(TypeError) { Rubydex::Config.load(123) }
+  end
+
+  def test_dead_code_returns_frozen_exclusion_patterns
+    with_context do |context|
+      patterns = ["app/generated/**", "lib/caf\u00e9.rb"]
+      context.write!("rubydex.toml", <<~TOML)
+        [dead-code]
+        exclude = ["app/generated/**", "lib/caf\u00e9.rb"]
+      TOML
+
+      dead_code = Rubydex::Config.load(context.absolute_path).dead_code
+
+      assert_instance_of(Rubydex::DeadCodeConfig, dead_code)
+      assert_equal(patterns, dead_code.exclude_patterns)
+      assert_predicate(dead_code, :frozen?)
+      assert_predicate(dead_code.exclude_patterns, :frozen?)
+      dead_code.exclude_patterns.each do |pattern|
+        assert_predicate(pattern, :frozen?)
+        assert_equal(Encoding::UTF_8, pattern.encoding)
+      end
+    end
+  end
+
+  def test_dead_code_defaults_to_no_exclusions_when_section_is_empty
+    with_context do |context|
+      context.write!("rubydex.toml", "[dead-code]\n")
+
+      assert_empty(Rubydex::Config.load(context.absolute_path).dead_code.exclude_patterns)
+    end
+  end
+
+  def test_load_raises_on_an_unknown_dead_code_setting
+    with_context do |context|
+      context.write!("rubydex.toml", "[dead-code]\nexcludes = [\"generated/**\"]\n")
+
+      error = assert_raises(Rubydex::ConfigError) do
+        Rubydex::Config.load(context.absolute_path)
+      end
+
+      assert_match(/dead-code.excludes/, error.message)
+    end
+  end
+
+  def test_load_raises_when_dead_code_exclude_is_not_an_array
+    with_context do |context|
+      context.write!("rubydex.toml", "[dead-code]\nexclude = \"generated/**\"\n")
+
+      error = assert_raises(Rubydex::ConfigError) do
+        Rubydex::Config.load(context.absolute_path)
+      end
+
+      assert_match(/dead-code/, error.message)
+    end
+  end
+
+  def test_load_raises_when_dead_code_exclude_contains_a_non_string
+    with_context do |context|
+      context.write!("rubydex.toml", "[dead-code]\nexclude = [\"generated/**\", 1]\n")
+
+      error = assert_raises(Rubydex::ConfigError) do
+        Rubydex::Config.load(context.absolute_path)
+      end
+
+      assert_match(/dead-code/, error.message)
+    end
+  end
+
+  def test_graph_dead_code_config_defaults_to_no_exclusions
+    assert_empty(Rubydex::Graph.new.dead_code_config.exclude_patterns)
+  end
+
+  def test_graph_uses_its_loaded_dead_code_configuration_snapshot
+    with_context do |context|
+      context.write!("rubydex.toml", "[dead-code]\nexclude = [\"original/**\"]\n")
+      config = Rubydex::Config.load(context.absolute_path)
+      graph = Rubydex::Graph.new
+      graph.load_config(config)
+      snapshot = graph.dead_code_config
+
+      context.write!("rubydex.toml", "[dead-code]\nexclude = [\"updated/**\"]\n")
+
+      assert_equal(["original/**"], config.dead_code.exclude_patterns)
+      assert_equal(["original/**"], graph.dead_code_config.exclude_patterns)
+
+      graph.load_config(Rubydex::Config.load(context.absolute_path))
+
+      assert_equal(["updated/**"], graph.dead_code_config.exclude_patterns)
+      assert_equal(["original/**"], snapshot.exclude_patterns)
+
+      context.write!("rubydex.toml", "")
+      graph.load_config(Rubydex::Config.load(context.absolute_path))
+
+      assert_empty(graph.dead_code_config.exclude_patterns)
+    end
+  end
+
+  def test_configure_for_workspace_loads_dead_code_exclusions_on_frozen_graphs
+    with_context do |context|
+      context.write!("rubydex.toml", "[dead-code]\nexclude = [\"generated/**\"]\n")
+      graph = Rubydex::Graph.configure_for_workspace(context.absolute_path).freeze
+      dead_code = graph.dead_code_config
+
+      assert_equal(["generated/**"], dead_code.exclude_patterns)
+      assert_predicate(dead_code, :frozen?)
+      assert_predicate(dead_code.exclude_patterns, :frozen?)
+
+      context.write!("rubydex.toml", "[dead-code]\nexclude = [\"reloaded/**\"]\n")
+      graph.load_config(Rubydex::Config.load(context.absolute_path))
+
+      assert_equal(["reloaded/**"], graph.dead_code_config.exclude_patterns)
+    end
   end
 
   def test_linter_returns_the_configured_rules

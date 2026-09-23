@@ -92,7 +92,7 @@ pub struct Graph {
     /// Project configuration
     config: Config,
 }
-assert_mem_size!(Graph, 368);
+assert_mem_size!(Graph, 384);
 assert_send_sync!(Graph);
 
 impl Graph {
@@ -144,6 +144,12 @@ impl Graph {
     #[must_use]
     pub fn workspace_path(&self) -> &Path {
         self.config.workspace_path()
+    }
+
+    /// Returns the configuration snapshot loaded into the graph.
+    #[must_use]
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     /// Loads a config for the graph

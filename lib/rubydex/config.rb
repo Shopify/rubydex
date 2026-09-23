@@ -1,6 +1,18 @@
 # frozen_string_literal: true
 
 module Rubydex
+  # Dead-code reporting settings, read from the `[dead-code]` section of the configuration file.
+  class DeadCodeConfig
+    #: Array[String]
+    attr_reader :exclude_patterns
+
+    #: (Array[String]) -> void
+    def initialize(exclude_patterns)
+      @exclude_patterns = exclude_patterns.freeze
+      freeze
+    end
+  end
+
   # The linter's settings, read from the `[linter]` section of the configuration file.
   class LinterConfig
     # The configured rules, keyed by rule name. Only rules the configuration file mentions appear here, so a rule that

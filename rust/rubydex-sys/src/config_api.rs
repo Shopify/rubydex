@@ -1,4 +1,5 @@
 use crate::diagnostic_api::DiagnosticSeverity;
+use crate::graph_api::{GraphPointer, with_graph};
 use crate::utils;
 use libc::{c_char, c_void};
 use rubydex::config::{Config, Rule};
@@ -91,12 +92,94 @@ pub unsafe extern "C" fn rdx_config_free(config: ConfigPointer) {
     }
 }
 
-/// Borrowed string bytes exposed while building Ruby configuration values.
+/// Length-delimited string bytes exposed while building Ruby configuration values. Ownership is determined by the
+/// containing array or rule.
 #[repr(C)]
 #[derive(Debug)]
 pub struct CConfigString {
     pub data: *const c_char,
     pub length: usize,
+}
+
+/// C-compatible array that owns both its string bytes and the string descriptors.
+#[repr(C)]
+pub struct CConfigStringArray {
+    pub items: *mut CConfigString,
+    pub len: usize,
+}
+
+impl CConfigStringArray {
+    fn new(strings: &[Box<str>]) -> Self {
+        if strings.is_empty() {
+            return Self {
+                items: ptr::null_mut(),
+                len: 0,
+            };
+        }
+
+        let items = strings
+            .iter()
+            .map(|string| {
+                let bytes = string.as_bytes().to_vec().into_boxed_slice();
+
+                CConfigString {
+                    length: bytes.len(),
+                    data: Box::into_raw(bytes).cast::<c_char>().cast_const(),
+                }
+            })
+            .collect::<Box<[CConfigString]>>();
+
+        Self {
+            len: items.len(),
+            items: Box::into_raw(items).cast::<CConfigString>(),
+        }
+    }
+}
+
+/// Returns an owned snapshot of the dead-code report's exclusion patterns. Free it with `rdx_config_string_array_free`.
+///
+/// # Safety
+///
+/// - `config` must be a valid `ConfigPointer` previously returned by `rdx_config_load`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_config_dead_code_exclude_patterns(config: ConfigPointer) -> CConfigStringArray {
+    let config = unsafe { &*config.cast::<Config>() };
+    CConfigStringArray::new(config.dead_code().exclude_patterns())
+}
+
+/// Returns an owned snapshot of the exclusion patterns from the graph's loaded dead-code configuration. Free it with
+/// `rdx_config_string_array_free`. The snapshot remains valid if the graph's configuration changes.
+///
+/// # Safety
+///
+/// - `graph` must be a valid `GraphPointer` previously returned by `rdx_graph_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_dead_code_exclude_patterns(graph: GraphPointer) -> CConfigStringArray {
+    with_graph(graph, |graph| {
+        CConfigStringArray::new(graph.config().dead_code().exclude_patterns())
+    })
+}
+
+/// Frees both the string bytes and descriptors of an owned configuration string array.
+///
+/// # Safety
+///
+/// - `strings` must have been returned by `rdx_config_dead_code_exclude_patterns` or
+///   `rdx_graph_dead_code_exclude_patterns`, and must not be used afterwards.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_config_string_array_free(strings: CConfigStringArray) {
+    if strings.items.is_null() {
+        return;
+    }
+
+    unsafe {
+        let strings = Box::from_raw(ptr::slice_from_raw_parts_mut(strings.items, strings.len));
+
+        for string in &*strings {
+            let bytes = ptr::slice_from_raw_parts_mut(string.data.cast_mut().cast::<u8>(), string.length);
+            let _ = Box::from_raw(bytes);
+        }
+    }
 }
 
 /// C-compatible struct representing a single configured linter rule.
@@ -201,5 +284,44 @@ pub unsafe extern "C" fn rdx_config_linter_rules_free(rules: CLinterRuleArray) {
                 let _ = Box::from_raw(rule.severity.cast_mut());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_string_array_owns_length_delimited_strings() {
+        let patterns = [Box::from("app/generated/**"), Box::from("a\0b"), Box::from("")];
+        let strings = CConfigStringArray::new(&patterns);
+
+        assert_eq!(strings.len, patterns.len());
+        let entries = unsafe { std::slice::from_raw_parts(strings.items, strings.len) };
+        for (entry, pattern) in entries.iter().zip(&patterns) {
+            assert_eq!(entry.length, pattern.len());
+            if !pattern.is_empty() {
+                assert_ne!(entry.data.cast::<u8>(), pattern.as_ptr());
+            }
+        }
+
+        drop(patterns);
+
+        for (entry, expected) in entries.iter().zip(["app/generated/**", "a\0b", ""]) {
+            let bytes = unsafe { std::slice::from_raw_parts(entry.data.cast::<u8>(), entry.length) };
+            assert_eq!(bytes, expected.as_bytes());
+        }
+
+        unsafe { rdx_config_string_array_free(strings) };
+    }
+
+    #[test]
+    fn config_string_array_accepts_empty_patterns() {
+        let strings = CConfigStringArray::new(&[]);
+
+        assert_eq!(strings.len, 0);
+        assert!(strings.items.is_null());
+
+        unsafe { rdx_config_string_array_free(strings) };
     }
 }

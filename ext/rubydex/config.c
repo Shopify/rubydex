@@ -13,7 +13,9 @@ static VALUE mRubydex;
 // other value objects handed back to Ruby.
 static VALUE cLinterConfig;
 static VALUE cRuleConfig;
+static VALUE cDeadCodeConfig;
 static ID id_linter;
+static ID id_dead_code;
 
 // Free function for Rubydex::Config: releases the parsed configuration allocated by Rust.
 static void config_free(void *ptr) {
@@ -63,6 +65,33 @@ static VALUE config_linter(VALUE config_obj) {
     return rb_ensure(config_linter_build, opaque_rule_array, config_linter_ensure, opaque_rule_array);
 }
 
+// Body function for rb_ensure while building a Rubydex::DeadCodeConfig.
+static VALUE config_dead_code_build(VALUE opaque_patterns) {
+    CConfigStringArray *patterns = (CConfigStringArray *)(uintptr_t)opaque_patterns;
+    VALUE exclude_patterns = rb_ary_new_capa((long)patterns->len);
+
+    for (size_t i = 0; i < patterns->len; i++) {
+        CConfigString pattern = patterns->items[i];
+        rb_ary_push(exclude_patterns, rb_str_freeze(rb_utf8_str_new(pattern.data, (long)pattern.length)));
+    }
+
+    return rb_class_new_instance(1, &exclude_patterns, cDeadCodeConfig);
+}
+
+// Both the array and its strings are owned copies, so the source configuration can change during Ruby allocations.
+static VALUE config_dead_code_ensure(VALUE opaque_patterns) {
+    CConfigStringArray *patterns = (CConfigStringArray *)(uintptr_t)opaque_patterns;
+    rdx_config_string_array_free(*patterns);
+
+    return Qnil;
+}
+
+VALUE rdxi_build_dead_code_config(CConfigStringArray exclude_patterns) {
+    VALUE opaque_patterns = (VALUE)(uintptr_t)&exclude_patterns;
+
+    return rb_ensure(config_dead_code_build, opaque_patterns, config_dead_code_ensure, opaque_patterns);
+}
+
 const rb_data_type_t config_type = {
     .wrap_struct_name = "Rubydex::Config",
     .function = {
@@ -98,6 +127,8 @@ static VALUE rdxr_config_load(VALUE klass, VALUE workspace_path) {
 
     VALUE config = TypedData_Wrap_Struct(klass, &config_type, result.config);
     rb_ivar_set(config, id_linter, config_linter(config));
+    CConfigStringArray exclude_patterns = rdx_config_dead_code_exclude_patterns(rdxi_config_from_object(config));
+    rb_ivar_set(config, id_dead_code, rdxi_build_dead_code_config(exclude_patterns));
 
     return config;
 }
@@ -124,7 +155,9 @@ void rdxi_initialize_config(VALUE moduleRubydex) {
 
     cLinterConfig = rb_define_class_under(mRubydex, "LinterConfig", rb_cObject);
     cRuleConfig = rb_define_class_under(mRubydex, "RuleConfig", rb_cObject);
+    cDeadCodeConfig = rb_define_class_under(mRubydex, "DeadCodeConfig", rb_cObject);
     id_linter = rb_intern("@linter");
+    id_dead_code = rb_intern("@dead_code");
 
     VALUE cConfig = rb_define_class_under(mRubydex, "Config", rb_cObject);
     rb_undef_alloc_func(cConfig);
@@ -137,4 +170,7 @@ void rdxi_initialize_config(VALUE moduleRubydex) {
 
     /* Returns the linter settings read from the `[linter]` section. Its rules are empty when the section is absent. */
     rb_define_attr(cConfig, "linter", true, false);
+
+    /* Returns the dead-code reporting settings read from the `[dead-code]` section. */
+    rb_define_attr(cConfig, "dead_code", true, false);
 }

@@ -179,6 +179,37 @@ impl LinterSettings {
     }
 }
 
+/// The dead-code report's settings, read from the `[dead-code]` section of the configuration file
+#[derive(Debug, Clone, Default)]
+pub struct DeadCodeSettings {
+    /// Workspace-relative file names and glob patterns to omit from reports without excluding them from indexing.
+    exclude_patterns: Box<[Box<str>]>,
+}
+
+impl DeadCodeSettings {
+    #[must_use]
+    pub fn exclude_patterns(&self) -> &[Box<str>] {
+        &self.exclude_patterns
+    }
+
+    /// Parses the `[dead-code]` section
+    fn parse(mut table: Table) -> Result<Self, String> {
+        let exclude_patterns = match table.remove("exclude") {
+            Some(value) => value
+                .try_into::<Vec<Box<str>>>()
+                .map_err(|error| format!("invalid `dead-code.exclude` setting: {error}"))?
+                .into_boxed_slice(),
+            None => Box::default(),
+        };
+
+        if let Some(key) = table.keys().next() {
+            return Err(format!("unknown setting `dead-code.{key}`"));
+        }
+
+        Ok(Self { exclude_patterns })
+    }
+}
+
 /// The configuration of a workspace, parsed from its `rubydex.toml` and shared by all built-in tools. It carries both
 /// the settings that are global to every tool, such as the workspace being analyzed, and the typed settings of each
 /// tool's own section (e.g. `[graph]`). Every section is parsed eagerly, so that all validation happens at load time and
@@ -191,8 +222,9 @@ pub struct Config {
     workspace_path: Box<Path>,
     graph: GraphSettings,
     linter: LinterSettings,
+    dead_code: DeadCodeSettings,
 }
-assert_mem_size!(Config, 80);
+assert_mem_size!(Config, 96);
 
 impl Default for Config {
     /// The configuration of the current working directory, with the default settings of every section, which is what a
@@ -206,6 +238,7 @@ impl Default for Config {
                 .into_boxed_path(),
             graph: GraphSettings::default(),
             linter: LinterSettings::default(),
+            dead_code: DeadCodeSettings::default(),
         }
     }
 }
@@ -288,6 +321,11 @@ impl Config {
         &self.linter
     }
 
+    #[must_use]
+    pub fn dead_code(&self) -> &DeadCodeSettings {
+        &self.dead_code
+    }
+
     /// Parses the content of the configuration file of the workspace rooted at `workspace_path` into the typed
     /// settings of each section
     fn parse(workspace_path: PathBuf, content: &str) -> Result<Self, String> {
@@ -319,6 +357,11 @@ impl Config {
             _ => LinterSettings::default(),
         };
 
+        let dead_code = match sections.remove("dead-code") {
+            Some(Value::Table(table)) => DeadCodeSettings::parse(table)?,
+            _ => DeadCodeSettings::default(),
+        };
+
         // Every section must be backed by a typed settings struct, so any leftover section is unknown.
         if let Some(key) = sections.keys().next() {
             return Err(format!("unknown section `{key}`"));
@@ -328,6 +371,7 @@ impl Config {
             workspace_path: Box::from(workspace_path),
             graph,
             linter,
+            dead_code,
         })
     }
 }
@@ -399,7 +443,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         fs::write(
             dir.path().join("rubydex.toml"),
-            "[graph]\nexclude = [\"vendor\"]\n\n[linter.rules.Something]\nenabled = true\n",
+            "[graph]\nexclude = [\"vendor\"]\n\n\
+             [dead-code]\nexclude = [\"app/generated/**\"]\n\n\
+             [linter.rules.Something]\nenabled = true\n",
         )
         .unwrap();
 
@@ -413,6 +459,70 @@ mod tests {
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].name(), "Something");
         assert!(rules[0].enabled());
+        assert_eq!(config.dead_code().exclude_patterns(), [Box::from("app/generated/**")]);
+    }
+
+    #[test]
+    fn parse_preserves_dead_code_exclusions_without_excluding_files_from_indexing() {
+        let config = parse("[dead-code]\nexclude = [\"app/generated/**\", \"lib/public_api.rb\"]\n")
+            .expect("dead-code exclusions are valid");
+
+        assert_eq!(
+            config.dead_code().exclude_patterns(),
+            [Box::from("app/generated/**"), Box::from("lib/public_api.rb")]
+        );
+        assert_eq!(config.excluded_patterns().len(), DEFAULT_EXCLUDED_DIRECTORIES.len());
+    }
+
+    #[test]
+    fn parse_accepts_empty_dead_code_settings() {
+        for content in ["[dead-code]\n", "[dead-code]\nexclude = []\n"] {
+            let config = parse(content).expect("empty dead-code settings are valid");
+            assert!(config.dead_code().exclude_patterns().is_empty());
+        }
+
+        assert!(Config::default().dead_code().exclude_patterns().is_empty());
+    }
+
+    #[test]
+    fn parse_rejects_an_unknown_dead_code_setting() {
+        let error = parse("[dead-code]\nexcludes = [\"app/generated/**\"]\n")
+            .expect_err("unknown dead-code settings must be rejected");
+
+        assert!(
+            error.contains("unknown setting `dead-code.excludes`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_an_invalid_dead_code_exclude_setting() {
+        for value in ["\"app/generated/**\"", "true", "[\"app/generated/**\", 1]", "{}"] {
+            let error = parse(&format!("[dead-code]\nexclude = {value}\n"))
+                .expect_err("dead-code exclusions must be an array of strings");
+
+            assert!(
+                error.contains("invalid `dead-code.exclude` setting"),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_rejects_a_dead_code_section_that_is_not_a_table() {
+        for content in ["dead-code = true\n", "[[dead-code]]\n"] {
+            let error = parse(content).expect_err("the dead-code section must be a table");
+            assert!(error.contains("`dead-code`"), "unexpected error: {error}");
+        }
+    }
+
+    #[test]
+    fn parse_rejects_an_underscored_dead_code_section() {
+        let error = parse("[dead_code]\n").expect_err("the dead-code section uses a hyphen");
+        assert!(
+            error.contains("unknown section `dead_code`"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -556,6 +666,7 @@ mod tests {
         assert_eq!(config.workspace_path(), path_helpers::resolved(dir.path()).unwrap());
         assert_eq!(config.excluded_patterns().len(), DEFAULT_EXCLUDED_DIRECTORIES.len());
         assert!(config.linter().rules().is_empty());
+        assert!(config.dead_code().exclude_patterns().is_empty());
     }
 
     #[test]
@@ -625,6 +736,7 @@ mod tests {
         // Nothing is configured, so the settings of every section are the default ones.
         assert_eq!(config.excluded_patterns().len(), DEFAULT_EXCLUDED_DIRECTORIES.len());
         assert!(config.linter().rules().is_empty());
+        assert!(config.dead_code().exclude_patterns().is_empty());
     }
 
     #[test]

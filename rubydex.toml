@@ -1,2 +1,6 @@
 [graph]
 exclude = ["docs", "ext", "rust", "target"]
+
+[dead-code]
+# Workspace-relative file paths or globs to omit from dead-code reports.
+exclude = []

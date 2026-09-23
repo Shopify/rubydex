@@ -938,6 +938,20 @@ static VALUE rdxr_graph_load_config(VALUE self, VALUE config_obj) {
 
 /*
  * call-seq:
+ *   dead_code_config -> Rubydex::DeadCodeConfig
+ *
+ * Returns a snapshot of the dead-code reporting settings applied to this graph.
+ */
+static VALUE rdxr_graph_dead_code_config(VALUE self) {
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    CConfigStringArray exclude_patterns = rdx_graph_dead_code_exclude_patterns(graph);
+    return rdxi_build_dead_code_config(exclude_patterns);
+}
+
+/*
+ * call-seq:
  *   keyword(name) -> Rubydex::Keyword?
  *
  * Returns the keyword object for the name, or nil if it is not a Ruby keyword.
@@ -997,5 +1011,6 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_define_method(cGraph, "excluded_patterns", rdxr_graph_excluded_patterns, 0);
     rb_define_method(cGraph, "workspace_path", rdxr_graph_workspace_path, 0);
     rb_define_method(cGraph, "load_config", rdxr_graph_load_config, 1);
+    rb_define_method(cGraph, "dead_code_config", rdxr_graph_dead_code_config, 0);
     rb_define_method(cGraph, "keyword", rdxr_graph_keyword, 1);
 }

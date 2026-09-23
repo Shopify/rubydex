@@ -601,7 +601,7 @@ class Rubydex::StaleQueryResultError < Rubydex::QueryError; end
 
 # The configuration of a workspace, parsed from its `rubydex.toml`. It carries both the settings that are global to
 # every built-in tool, such as the workspace being analyzed, and the typed settings of each tool's own section (e.g.
-# `[graph]`, `[linter]`).
+# `[graph]`, `[linter]`, `[dead-code]`).
 class Rubydex::Config
   class << self
     # Loads the configuration file for `workspace_path/rubydex.toml` if it exists or uses the defaults.
@@ -613,9 +613,22 @@ class Rubydex::Config
   sig { returns(Rubydex::LinterConfig) }
   def linter; end
 
+  # Dead-code reporting settings, read from the `[dead-code]` section.
+  sig { returns(Rubydex::DeadCodeConfig) }
+  def dead_code; end
+
   # The configured workspace path, which is usually PWD, except for editors that spawn language servers outside of pwd.
   sig { returns(String) }
   def workspace_path; end
+end
+
+# Dead-code reporting settings, read from the `[dead-code]` section of the configuration file.
+class Rubydex::DeadCodeConfig
+  sig { returns(T::Array[String]) }
+  attr_reader :exclude_patterns
+
+  sig { params(exclude_patterns: T::Array[String]).void }
+  def initialize(exclude_patterns); end
 end
 
 # The linter's settings, read from the `[linter]` section of the configuration file.
@@ -804,6 +817,10 @@ class Rubydex::Graph
 
   sig { returns(T::Enumerable[Rubydex::Declaration]) }
   def dead_code_candidates; end
+
+  # Returns a snapshot of the dead-code reporting settings applied to this graph.
+  sig { returns(Rubydex::DeadCodeConfig) }
+  def dead_code_config; end
 
   sig { params(encoding: String).void }
   def encoding=(encoding); end
