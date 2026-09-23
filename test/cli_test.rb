@@ -52,6 +52,7 @@ class CLITest < Minitest::Test
 
     assert_includes(commands, Rubydex::CLI::Command::Query)
     assert_includes(commands, Rubydex::CLI::Command::Console)
+    assert_includes(commands, Rubydex::CLI::Command::DeadCode)
     assert_includes(commands, Rubydex::CLI::Command::Lint)
     assert_includes(commands, Rubydex::CLI::Command::Mcp)
     assert_includes(commands, Rubydex::CLI::Command::Skill)
@@ -60,6 +61,7 @@ class CLITest < Minitest::Test
     assert_equal("query", Rubydex::CLI::Command::Query.command_name)
     assert_equal("query <CYPHER>", Rubydex::CLI::Command::Query.usage_form)
     assert_equal("console", Rubydex::CLI::Command::Console.usage_form)
+    assert_equal("dead-code", Rubydex::CLI::Command::DeadCode.usage_form)
     assert_equal("lint", Rubydex::CLI::Command::Lint.usage_form)
   end
 
@@ -75,11 +77,12 @@ class CLITest < Minitest::Test
     # before the offsets are compared: a missing one fails on its own assertion rather than on a
     # comparison against nil. We collect the beginning offset of the first match (index 0) for each
     # command so that we can compare their order below.
-    console, lint, mcp, query, help = ["console", "lint", "mcp", "query", "help"].map do |name|
+    console, dead_code, lint, mcp, query, help = ["console", "dead-code", "lint", "mcp", "query", "help"].map do |name|
       assert_stdout_includes_pattern(result, /^  #{name}\b/).begin(0)
     end
 
-    assert_operator(console, :<, lint)
+    assert_operator(console, :<, dead_code)
+    assert_operator(dead_code, :<, lint)
     assert_operator(lint, :<, mcp)
     assert_operator(mcp, :<, query)
     # `help` is listed last rather than in alphabetical position.
@@ -124,6 +127,7 @@ class CLITest < Minitest::Test
     [
       Rubydex::CLI::Command::Query,
       Rubydex::CLI::Command::Console,
+      Rubydex::CLI::Command::DeadCode,
       Rubydex::CLI::Command::Lint,
       Rubydex::CLI::Command::Mcp,
       Rubydex::CLI::Command::Skill,
@@ -235,7 +239,7 @@ class CLITest < Minitest::Test
   end
 
   def test_command_help_is_available_per_subcommand
-    ["query", "console", "lint", "mcp"].each do |command|
+    ["query", "console", "dead-code", "lint", "mcp"].each do |command|
       result = rdx(command, "--help")
 
       assert_success_status(result)
@@ -254,7 +258,7 @@ class CLITest < Minitest::Test
   end
 
   def test_every_command_reports_an_invalid_option_with_the_usage
-    ["query", "console", "lint", "mcp"].each do |command|
+    ["query", "console", "dead-code", "lint", "mcp"].each do |command|
       result = rdx(command, "--bogus-flag")
 
       refute_success_status(result)
@@ -275,6 +279,320 @@ class CLITest < Minitest::Test
     assert_stderr_includes(result, "--format FORMAT")
     assert_stderr_includes(result, "Output format (table or json)")
     refute_stderr_includes(result, "OptionParser::InvalidArgument")
+  end
+
+  def test_dead_code_reports_candidates_in_a_table
+    with_context do |context|
+      context.write!("app.rb", <<~RUBY)
+        class UnusedClass; end
+        module UnusedModule; end
+        UNUSED_CONSTANT = 1
+        class UsedClass; end
+        UsedClass.new
+      RUBY
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("dead-code")
+
+      assert_success_status(result)
+      assert_stdout_includes(result, "Dead-code candidates")
+      assert_stdout_includes_pattern(result, /\| Name\s+\| Kind\s+\| Location\s+\|/)
+      assert_stdout_includes_pattern(result, /\| UnusedClass\s+\| Class\s+\| app\.rb:1:7\s+\|/)
+      assert_stdout_includes_pattern(result, /\| UnusedModule\s+\| Module\s+\| app\.rb:2:8\s+\|/)
+      assert_stdout_includes_pattern(result, /\| UNUSED_CONSTANT\s+\| Constant\s+\| app\.rb:3:1\s+\|/)
+      assert_stdout_includes(result, "3 candidates found.")
+      refute_stdout_includes(result, "UsedClass")
+      refute_stdout_includes(result, context.absolute_path)
+      assert_stderr_includes(result, "Indexing workspace...")
+      assert_stderr_includes(result, "Resolving graph...")
+      refute_stdout_includes(result, "Indexing workspace...")
+      refute_stdout_includes(result, "Resolving graph...")
+    end
+  end
+
+  def test_dead_code_supports_json_output
+    with_context do |context|
+      context.write!("app.rb", "class Unused; end\nclass Used; end\nUsed.new\nclass Unused; end\n")
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("dead-code", "--format", "json")
+
+      assert_success_status(result)
+      assert_equal(
+        {
+          "candidates" => [
+            {
+              "name" => "Unused",
+              "kind" => "Class",
+              "locations" => [
+                { "path" => "app.rb", "line" => 1, "column" => 7 },
+                { "path" => "app.rb", "line" => 4, "column" => 7 },
+              ],
+            },
+          ],
+          "total" => 1,
+        },
+        JSON.parse(result.out),
+        result.to_s,
+      )
+      assert(result.out.end_with?("\n"), result.to_s)
+      assert_stderr_includes(result, "Indexing workspace...")
+      assert_stderr_includes(result, "Resolving graph...")
+    end
+  end
+
+  def test_dead_code_reports_when_no_candidates_are_found
+    with_context do |context|
+      context.write!("app.rb", "class Used; end\nUsed.new\n")
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("dead-code")
+
+      assert_success_status(result)
+      assert_stdout_equals("No dead-code candidates found.\n", result)
+
+      result = rdx("dead-code", "--format", "json")
+
+      assert_success_status(result)
+      assert_equal({ "candidates" => [], "total" => 0 }, JSON.parse(result.out), result.to_s)
+    end
+  end
+
+  def test_dead_code_filters_definitions_but_counts_references_outside_the_path
+    with_context do |context|
+      context.write!("app/unused.rb", "class Unused; end\n")
+      context.write!("app/used.rb", "class Used; end\n")
+      context.write!("app/models/nested.rb", "class Nested; end\n")
+      context.write!("lib/other.rb", "class Unused; end\nclass Outside; end\nUsed.new\n")
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("dead-code", "--path", "app/*.rb", "--format", "json")
+
+      assert_success_status(result)
+      assert_equal(
+        {
+          "candidates" => [
+            {
+              "name" => "Unused",
+              "kind" => "Class",
+              "locations" => [{ "path" => "app/unused.rb", "line" => 1, "column" => 7 }],
+            },
+          ],
+          "total" => 1,
+        },
+        JSON.parse(result.out),
+        result.to_s,
+      )
+    end
+  end
+
+  def test_dead_code_can_fail_on_candidates_after_printing_a_table
+    with_context do |context|
+      context.write!("app.rb", "class Unused; end\n")
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("dead-code", "--fail-on-candidates")
+
+      assert_equal(1, result.status, result.to_s)
+      assert_stdout_includes(result, "Dead-code candidates")
+      assert_stdout_includes_pattern(result, /\| Unused\s+\| Class\s+\| app\.rb:1:7\s+\|/)
+      assert_stdout_includes(result, "1 candidate found.")
+    end
+  end
+
+  def test_dead_code_can_fail_on_candidates_after_printing_json
+    with_context do |context|
+      context.write!("app.rb", "class Unused; end\n")
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("dead-code", "--fail-on-candidates", "--format", "json")
+
+      assert_equal(1, result.status, result.to_s)
+      assert_equal(
+        {
+          "candidates" => [
+            {
+              "name" => "Unused",
+              "kind" => "Class",
+              "locations" => [{ "path" => "app.rb", "line" => 1, "column" => 7 }],
+            },
+          ],
+          "total" => 1,
+        },
+        JSON.parse(result.out),
+        result.to_s,
+      )
+    end
+  end
+
+  def test_dead_code_does_not_fail_when_no_filtered_candidates_are_found
+    with_context do |context|
+      context.write!("app.rb", "class Unused; end\n")
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("dead-code", "--path", "lib/**", "--fail-on-candidates")
+
+      assert_success_status(result)
+      assert_stdout_equals("No dead-code candidates found.\n", result)
+
+      result = rdx("dead-code", "--path", "lib/**", "--fail-on-candidates", "--format", "json")
+
+      assert_success_status(result)
+      assert_equal({ "candidates" => [], "total" => 0 }, JSON.parse(result.out), result.to_s)
+    end
+  end
+
+  def test_dead_code_help_describes_the_analysis_limits
+    result = rdx("dead-code", "--help")
+
+    assert_success_status(result)
+    assert_stdout_includes(result, "classes, modules and constants with no detected references")
+    assert_stdout_includes(result, "missing references do not prove safe deletion")
+    assert_stdout_includes(result, "--format FORMAT")
+    assert_stdout_includes(result, "--path GLOB")
+    assert_stdout_includes(result, "--fail-on-candidates")
+    refute_stderr_includes(result, "Indexing workspace")
+  end
+
+  def test_dead_code_config_exclusions_apply_to_reports_and_failure_status
+    with_context do |context|
+      context.write!("rubydex.toml", "[dead-code]\nexclude = [\"generated/**\"]\n")
+      context.write!("app.rb", "class Kept; end\nclass Used; end\n")
+      context.write!("generated/nested/model.rb", "class Hidden; end\nUsed.new\n")
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("dead-code", "--format", "json", "--fail-on-candidates")
+
+      assert_equal(1, result.status, result.to_s)
+      payload = JSON.parse(result.out)
+
+      assert_equal(1, payload.fetch("total"))
+      assert_equal(["Kept"], payload.fetch("candidates").map { |candidate| candidate.fetch("name") })
+
+      result = rdx("dead-code", "--path", "generated/**", "--fail-on-candidates")
+
+      assert_success_status(result)
+      assert_stdout_equals("No dead-code candidates found.\n", result)
+    end
+  end
+
+  def test_dead_code_does_not_fail_when_configuration_excludes_every_candidate
+    with_context do |context|
+      context.write!("rubydex.toml", "[dead-code]\nexclude = [\"**\"]\n")
+      context.write!("app.rb", "class Unused; end\n")
+      context.write!("lib/nested/unused.rb", "module UnusedModule; end\n")
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("dead-code", "--fail-on-candidates")
+
+      assert_success_status(result)
+      assert_stdout_equals("No dead-code candidates found.\n", result)
+
+      result = rdx("dead-code", "--fail-on-candidates", "--format", "json")
+
+      assert_success_status(result)
+      assert_equal({ "candidates" => [], "total" => 0 }, JSON.parse(result.out), result.to_s)
+    end
+  end
+
+  def test_dead_code_uses_the_bundle_root_for_configuration_and_paths_from_a_nested_directory
+    with_context do |context|
+      context.write!("rubydex.toml", "[dead-code]\nexclude = [\"app/generated/**\"]\n")
+      context.write!("app/nested/rubydex.toml", "[dead-code]\nexclude = [\"**\"]\n")
+      context.write!("app/kept.rb", "class Kept; end\n")
+      context.write!("app/generated/hidden.rb", "class Hidden; end\n")
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("dead-code", "--path", "app/**", "--format", "json", chdir: context.absolute_path_to("app/nested"))
+
+      assert_success_status(result)
+      assert_equal(
+        {
+          "candidates" => [
+            {
+              "name" => "Kept",
+              "kind" => "Class",
+              "locations" => [{ "path" => "app/kept.rb", "line" => 1, "column" => 7 }],
+            },
+          ],
+          "total" => 1,
+        },
+        JSON.parse(result.out),
+        result.to_s,
+      )
+    end
+  end
+
+  def test_dead_code_rejects_an_invalid_format_before_indexing
+    result = rdx("dead-code", "--format", "yaml")
+
+    refute_success_status(result)
+    assert_stderr_includes(result, "invalid argument: --format yaml")
+    assert_stderr_includes(result, "Usage: rdx dead-code [options]")
+    refute_stderr_includes(result, "Indexing workspace")
+    assert_empty_stdout(result)
+  end
+
+  def test_dead_code_requires_a_format_value
+    result = rdx("dead-code", "--format")
+
+    refute_success_status(result)
+    assert_stderr_includes(result, "missing argument: --format")
+    assert_stderr_includes(result, "Usage: rdx dead-code [options]")
+    refute_stderr_includes(result, "Indexing workspace")
+    assert_empty_stdout(result)
+  end
+
+  def test_dead_code_requires_a_path_value
+    result = rdx("dead-code", "--path")
+
+    refute_success_status(result)
+    assert_stderr_includes(result, "missing argument: --path")
+    assert_stderr_includes(result, "Usage: rdx dead-code [options]")
+    refute_stderr_includes(result, "Indexing workspace")
+    assert_empty_stdout(result)
+  end
+
+  def test_dead_code_rejects_a_workspace_argument
+    result = rdx("dead-code", "workspace")
+
+    refute_success_status(result)
+    assert_stderr_includes(result, "unexpected argument: workspace")
+    assert_stderr_includes(result, "Usage: rdx dead-code [options]")
+    refute_stderr_includes(result, "Indexing workspace")
+    assert_empty_stdout(result)
+  end
+
+  def test_dead_code_reports_invalid_configuration
+    with_context do |context|
+      context.write!("rubydex.toml", "[invalid\n")
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("dead-code")
+
+      refute_success_status(result)
+      assert_stderr_includes(result, "rubydex.toml")
+      refute_stderr_includes(result, "Rubydex::ConfigError")
+      refute_stderr_includes(result, "Indexing workspace")
+      assert_empty_stdout(result)
+    end
+  end
+
+  def test_dead_code_reports_an_invalid_exclusion_setting_before_indexing
+    with_context do |context|
+      context.write!("rubydex.toml", "[dead-code]\nexclude = \"**\"\n")
+      context.write!("app.rb", "class Unused; end\n")
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      result = rdx("dead-code", "--format", "json", "--fail-on-candidates")
+
+      assert_equal(1, result.status, result.to_s)
+      assert_stderr_includes(result, "rubydex.toml")
+      assert_stderr_includes(result, "invalid `dead-code.exclude` setting")
+      refute_stderr_includes(result, "Rubydex::ConfigError")
+      refute_stderr_includes(result, "Indexing workspace")
+      assert_empty_stdout(result)
+    end
   end
 
   def test_mcp_rejects_extra_arguments

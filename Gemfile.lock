@@ -2,6 +2,7 @@ PATH
   remote: .
   specs:
     rubydex (0.4.1)
+      terminal-table (~> 4.0)
 
 GEM
   remote: https://rubygems.org/
@@ -79,6 +80,8 @@ GEM
     ruby2_keywords (0.0.5)
     ruby_memcheck (3.0.1)
       nokogiri
+    terminal-table (4.0.0)
+      unicode-display_width (>= 1.1.1, < 4)
     tsort (0.2.0)
     unicode-display_width (3.2.0)
       unicode-emoji (~> 4.1)

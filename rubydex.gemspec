@@ -40,4 +40,6 @@ Gem::Specification.new do |spec|
   spec.executables = Dir.glob("exe/*").map { |f| File.basename(f) }
   spec.require_paths = ["lib"]
   spec.extensions = ["ext/rubydex/extconf.rb"]
+
+  spec.add_dependency("terminal-table", "~> 4.0")
 end
