@@ -1,8 +1,8 @@
 use crate::assert_mem_size;
-use crate::diagnostic::Severity;
+use crate::diagnostic::{Rule as BuiltInRule, Severity};
 use crate::errors::Errors;
 use crate::path_helpers;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
@@ -68,13 +68,45 @@ impl GraphSettings {
     }
 }
 
-/// The setting of a single linter rule, read from a `[linter.rules.RuleName]` table
+/// A configuration value for custom rules.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RuleOption {
+    String(Box<str>),
+    Integer(i64),
+    Float(f64),
+    Boolean(bool),
+    Array(Box<[RuleOption]>),
+}
+
+impl RuleOption {
+    fn parse(value: Value) -> Result<Self, String> {
+        match value {
+            Value::String(value) => Ok(Self::String(value.into_boxed_str())),
+            Value::Integer(value) => Ok(Self::Integer(value)),
+            Value::Float(value) => Ok(Self::Float(value)),
+            Value::Boolean(value) => Ok(Self::Boolean(value)),
+            Value::Array(values) => values
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| Self::parse(value).map_err(|error| format!("array element {index}: {error}")))
+                .collect::<Result<_, _>>()
+                .map(Self::Array),
+            value => Err(format!(
+                "expected a string, integer, float, boolean, or array, got {}",
+                value.type_str()
+            )),
+        }
+    }
+}
+
+/// The settings of a single linter rule, read from a `[linter.rules.RuleName]` table
 #[derive(Debug, Clone)]
 pub struct Rule {
     name: Box<str>,
     enabled: bool,
     exclude_patterns: Box<[Box<str>]>,
     severity: Option<Severity>,
+    options: HashMap<Box<str>, RuleOption>,
 }
 
 impl Rule {
@@ -96,6 +128,11 @@ impl Rule {
     #[must_use]
     pub fn severity(&self) -> Option<&Severity> {
         self.severity.as_ref()
+    }
+
+    #[must_use]
+    pub fn options(&self) -> &HashMap<Box<str>, RuleOption> {
+        &self.options
     }
 
     /// Parses a single `[linter.rules.{name}]` table
@@ -131,15 +168,28 @@ impl Rule {
             None => None,
         };
 
-        if let Some(key) = table.keys().next() {
+        // Only accept custom configuration for custom rules and not built-in ones.
+        if let Some(key) = table.keys().next()
+            && BuiltInRule::all().iter().any(|rule| rule.name() == name)
+        {
             return Err(format!("unknown setting `linter.rules.{name}.{key}`"));
         }
+
+        let options = table
+            .into_iter()
+            .map(|(key, value)| {
+                let value = RuleOption::parse(value)
+                    .map_err(|error| format!("invalid `linter.rules.{name}.{key}` setting: {error}"))?;
+                Ok((key.into_boxed_str(), value))
+            })
+            .collect::<Result<_, String>>()?;
 
         Ok(Self {
             name: Box::from(name),
             enabled,
             exclude_patterns,
             severity,
+            options,
         })
     }
 }
@@ -435,6 +485,132 @@ mod tests {
         assert!(!other.enabled());
         assert!(other.exclude_patterns().is_empty());
         assert_eq!(other.severity(), None);
+        assert!(other.options().is_empty());
+    }
+
+    #[test]
+    fn parse_preserves_primitive_rule_option_types() {
+        let config = parse(
+            r#"
+            [linter.rules.MyRule]
+            enabled = false
+            severity = "warning"
+            exclude = ["generated/**"]
+            text = "1"
+            integer = 1
+            float = 1.0
+            allow_reopen = true
+            allow_generated = false
+            "application.parent" = "ApplicationRecord"
+            message = "café\u0000Ruby"
+            "#,
+        )
+        .expect("custom rules accept primitive options alongside shared settings");
+
+        let rule = &config.linter().rules()[0];
+        assert!(!rule.enabled());
+        assert_eq!(rule.severity(), Some(&Severity::Warning));
+        assert_eq!(rule.exclude_patterns(), [Box::from("generated/**")]);
+        assert_eq!(
+            rule.options(),
+            &HashMap::from([
+                (Box::from("text"), RuleOption::String(Box::from("1"))),
+                (Box::from("integer"), RuleOption::Integer(1)),
+                (Box::from("float"), RuleOption::Float(1.0)),
+                (Box::from("allow_reopen"), RuleOption::Boolean(true)),
+                (Box::from("allow_generated"), RuleOption::Boolean(false)),
+                (
+                    Box::from("application.parent"),
+                    RuleOption::String(Box::from("ApplicationRecord")),
+                ),
+                (Box::from("message"), RuleOption::String(Box::from("café\0Ruby"))),
+            ])
+        );
+    }
+
+    #[test]
+    fn parse_preserves_rule_option_arrays() {
+        let config = parse(
+            r#"
+            [linter.rules.MyRule]
+            paths = ["lib/**/*.rb", "test/**/*.rb"]
+            empty = []
+            mixed = ["1", 1, 1.0, true, false]
+            nested = [["app/models"], []]
+            "#,
+        )
+        .expect("custom rules accept arrays of supported values");
+        let options = config.linter().rules()[0].options();
+
+        assert_eq!(
+            options["paths"],
+            RuleOption::Array(Box::new([
+                RuleOption::String(Box::from("lib/**/*.rb")),
+                RuleOption::String(Box::from("test/**/*.rb")),
+            ]))
+        );
+        assert_eq!(options["empty"], RuleOption::Array(Box::default()));
+        assert_eq!(
+            options["mixed"],
+            RuleOption::Array(Box::new([
+                RuleOption::String(Box::from("1")),
+                RuleOption::Integer(1),
+                RuleOption::Float(1.0),
+                RuleOption::Boolean(true),
+                RuleOption::Boolean(false),
+            ]))
+        );
+        assert_eq!(
+            options["nested"],
+            RuleOption::Array(Box::new([
+                RuleOption::Array(Box::new([RuleOption::String(Box::from("app/models"))])),
+                RuleOption::Array(Box::default()),
+            ]))
+        );
+    }
+
+    #[test]
+    fn parse_rejects_unsupported_values_inside_rule_option_arrays() {
+        for (value, kind) in [("1979-05-27", "datetime"), ("{ path = \"lib\" }", "table")] {
+            let error = parse(&format!(
+                "[linter.rules.MyRule]\npaths = [\"lib\", [\"app\", {value}]]\n"
+            ))
+            .expect_err("unsupported array elements must be rejected recursively");
+            assert_eq!(
+                error,
+                format!(
+                    "invalid `linter.rules.MyRule.paths` setting: array element 1: array element 1: \
+                     expected a string, integer, float, boolean, or array, got {kind}"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn parse_keeps_array_options_scoped_to_custom_rule_settings() {
+        for (content, path) in [
+            ("[graph]\npaths = [\"lib\"]\n", "graph.paths"),
+            ("[linter]\npaths = [\"lib\"]\n", "linter.paths"),
+            (
+                "[linter.rules.ParseError]\npaths = [\"lib\"]\n",
+                "linter.rules.ParseError.paths",
+            ),
+            (
+                "[linter.rules.MyRule]\nenabled = [true]\n",
+                "linter.rules.MyRule.enabled",
+            ),
+            (
+                "[linter.rules.MyRule]\nseverity = [\"warning\"]\n",
+                "linter.rules.MyRule.severity",
+            ),
+            (
+                "[linter.rules.MyRule]\nexclude = [\"lib\", 1]\n",
+                "linter.rules.MyRule.exclude",
+            ),
+        ] {
+            let error = parse(content).expect_err("array options must not relax validation of other settings");
+            assert!(error.contains(&format!("`{path}`")), "unexpected error: {error}");
+        }
     }
 
     #[test]
@@ -494,17 +670,6 @@ mod tests {
 
         assert!(
             error.contains("invalid `linter.rules.Something.enabled` setting"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn parse_rejects_an_unknown_rule_setting() {
-        let error =
-            parse("[linter.rules.Something]\nparallel = true\n").expect_err("unknown rule settings must be rejected");
-
-        assert!(
-            error.contains("unknown setting `linter.rules.Something.parallel`"),
             "unexpected error: {error}"
         );
     }
