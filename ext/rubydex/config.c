@@ -22,6 +22,28 @@ static void config_free(void *ptr) {
     }
 }
 
+static VALUE config_option_value(const CConfigValue *value) {
+    switch (value->tag) {
+    case CConfigValue_String:
+        return rb_str_freeze(rb_utf8_str_new(value->string.value.data, (long)value->string.value.length));
+    case CConfigValue_Integer:
+        return LL2NUM(value->integer.value);
+    case CConfigValue_Float:
+        return rb_float_new(value->float_.value);
+    case CConfigValue_Boolean:
+        return value->boolean.value ? Qtrue : Qfalse;
+    case CConfigValue_Array: {
+        VALUE array = rb_ary_new_capa((long)value->array.len);
+        for (size_t i = 0; i < value->array.len; i++) {
+            rb_ary_push(array, config_option_value(&value->array.items[i]));
+        }
+        return rb_obj_freeze(array);
+    }
+    }
+
+    rb_raise(rb_eRuntimeError, "Unknown custom rule option type");
+}
+
 // Body function for rb_ensure while building a Rubydex::LinterConfig.
 static VALUE config_linter_build(VALUE opaque_rule_array) {
     CLinterRuleArray *rule_array = (CLinterRuleArray *)(uintptr_t)opaque_rule_array;
@@ -37,12 +59,20 @@ static VALUE config_linter_build(VALUE opaque_rule_array) {
         }
         rb_obj_freeze(exclude_patterns);
 
+        VALUE options = rb_hash_new_capa((long)rule.options_length);
+        for (size_t j = 0; j < rule.options_length; j++) {
+            const CConfigOption *option = &rule.options[j];
+            VALUE key = rb_str_freeze(rb_utf8_str_new(option->key.data, (long)option->key.length));
+            rb_hash_aset(options, key, config_option_value(&option->value));
+        }
+        rb_obj_freeze(options);
+
         VALUE severity = rule.severity == NULL
             ? Qnil
             : rdxi_build_diagnostic_severity_value(mRubydex, *rule.severity);
-        VALUE argv[] = {rule_name, rule.enabled ? Qtrue : Qfalse, exclude_patterns, severity};
+        VALUE argv[] = {rule_name, rule.enabled ? Qtrue : Qfalse, exclude_patterns, severity, options};
 
-        rb_hash_aset(rules, rule_name, rb_class_new_instance(4, argv, cRuleConfig));
+        rb_hash_aset(rules, rule_name, rb_class_new_instance(5, argv, cRuleConfig));
     }
 
     return rb_class_new_instance(1, &rules, cLinterConfig);
@@ -60,7 +90,10 @@ static VALUE config_linter(VALUE config_obj) {
     CLinterRuleArray rule_array = rdx_config_linter_rules(rdxi_config_from_object(config_obj));
     VALUE opaque_rule_array = (VALUE)(uintptr_t)&rule_array;
 
-    return rb_ensure(config_linter_build, opaque_rule_array, config_linter_ensure, opaque_rule_array);
+    VALUE linter = rb_ensure(config_linter_build, opaque_rule_array, config_linter_ensure, opaque_rule_array);
+    // Exported strings borrow the Rust configuration until all Ruby values have been built.
+    RB_GC_GUARD(config_obj);
+    return linter;
 }
 
 const rb_data_type_t config_type = {
