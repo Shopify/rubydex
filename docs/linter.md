@@ -29,6 +29,21 @@ exclude = ["path_to_skip/**"]
 severity = "warning" # Valid values: "hint" | "information" | "warning" | "error"
 ```
 
+Custom rules can accept additional settings that are only applicable to them:
+
+```toml
+[linter.rules.MyCustomRule]
+paths = ["app/models/user.rb", "app/models/post.rb"]
+max_methods = 10
+```
+
+Which are accessible through the `options` method.
+
+```ruby
+paths = options["paths"]
+max_methods = options["max_methods"]
+```
+
 ### Editor support
 
 Linting results are automatically surfaced by the [Ruby LSP](https://github.com/Shopify/ruby-lsp). The only caveat is that only the beta version of the Ruby LSP is currently supported due to the Rubydex requirement. We are working on stabilizing a release of the Ruby LSP to remove this requirement. You can enable the beta in VS Code with the following setting
