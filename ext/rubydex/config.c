@@ -90,10 +90,7 @@ static VALUE config_linter(VALUE config_obj) {
     CLinterRuleArray rule_array = rdx_config_linter_rules(rdxi_config_from_object(config_obj));
     VALUE opaque_rule_array = (VALUE)(uintptr_t)&rule_array;
 
-    VALUE linter = rb_ensure(config_linter_build, opaque_rule_array, config_linter_ensure, opaque_rule_array);
-    // Exported strings borrow the Rust configuration until all Ruby values have been built.
-    RB_GC_GUARD(config_obj);
-    return linter;
+    return rb_ensure(config_linter_build, opaque_rule_array, config_linter_ensure, opaque_rule_array);
 }
 
 const rb_data_type_t config_type = {
