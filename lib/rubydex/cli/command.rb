@@ -144,6 +144,20 @@ module Rubydex
         Dir.pwd
       end
 
+      # Returns the path to show users for a location: relative to the workspace for files inside it, the absolute
+      # path for files outside it (dependencies, for example) and the URI opaque for non file URIs, so that
+      # `untitled:Untitled-1` displays as `Untitled-1`.
+      #
+      #: (Location, workspace: String) -> String
+      def display_path(location, workspace:)
+        path = location.to_file_path
+        return path unless path == workspace || path.start_with?("#{workspace}/")
+
+        Pathname.new(path).relative_path_from(workspace).to_s
+      rescue Location::NotFileUriError
+        URI(location.uri).opaque || location.uri
+      end
+
       # Builds the workspace graph, sending progress messages to `progress_io`.
       #: (IO progress_io, ?workspace_path: String, ?config: Rubydex::Config) -> Rubydex::Graph
       def build_graph(progress_io, workspace_path: Dir.pwd, config: Rubydex::Config.load(workspace_path))
