@@ -2,9 +2,7 @@
 
 require "fileutils"
 require "minitest/test"
-require "pathname"
 require "tmpdir"
-require "uri"
 require "rubydex/linter"
 
 module Rubydex

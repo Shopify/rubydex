@@ -1,8 +1,6 @@
 # frozen_string_literal: true
 
 require "json"
-require "pathname"
-require "uri"
 
 module Rubydex
   module MCPServer
