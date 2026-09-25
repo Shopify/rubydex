@@ -52,6 +52,7 @@ class CLITest < Minitest::Test
 
     assert_includes(commands, Rubydex::CLI::Command::Query)
     assert_includes(commands, Rubydex::CLI::Command::Console)
+    assert_includes(commands, Rubydex::CLI::Command::DeadCode)
     assert_includes(commands, Rubydex::CLI::Command::Lint)
     assert_includes(commands, Rubydex::CLI::Command::Mcp)
     assert_includes(commands, Rubydex::CLI::Command::Skill)
@@ -60,6 +61,7 @@ class CLITest < Minitest::Test
     assert_equal("query", Rubydex::CLI::Command::Query.command_name)
     assert_equal("query <CYPHER>", Rubydex::CLI::Command::Query.usage_form)
     assert_equal("console", Rubydex::CLI::Command::Console.usage_form)
+    assert_equal("dead_code", Rubydex::CLI::Command::DeadCode.usage_form)
     assert_equal("lint", Rubydex::CLI::Command::Lint.usage_form)
   end
 
@@ -75,11 +77,12 @@ class CLITest < Minitest::Test
     # before the offsets are compared: a missing one fails on its own assertion rather than on a
     # comparison against nil. We collect the beginning offset of the first match (index 0) for each
     # command so that we can compare their order below.
-    console, lint, mcp, query, help = ["console", "lint", "mcp", "query", "help"].map do |name|
+    console, dead_code, lint, mcp, query, help = ["console", "dead_code", "lint", "mcp", "query", "help"].map do |name|
       assert_stdout_includes_pattern(result, /^  #{name}\b/).begin(0)
     end
 
-    assert_operator(console, :<, lint)
+    assert_operator(console, :<, dead_code)
+    assert_operator(dead_code, :<, lint)
     assert_operator(lint, :<, mcp)
     assert_operator(mcp, :<, query)
     # `help` is listed last rather than in alphabetical position.
@@ -124,6 +127,7 @@ class CLITest < Minitest::Test
     [
       Rubydex::CLI::Command::Query,
       Rubydex::CLI::Command::Console,
+      Rubydex::CLI::Command::DeadCode,
       Rubydex::CLI::Command::Lint,
       Rubydex::CLI::Command::Mcp,
       Rubydex::CLI::Command::Skill,
@@ -235,7 +239,7 @@ class CLITest < Minitest::Test
   end
 
   def test_command_help_is_available_per_subcommand
-    ["query", "console", "lint", "mcp"].each do |command|
+    ["query", "console", "dead_code", "lint", "mcp"].each do |command|
       result = rdx(command, "--help")
 
       assert_success_status(result)
@@ -254,7 +258,7 @@ class CLITest < Minitest::Test
   end
 
   def test_every_command_reports_an_invalid_option_with_the_usage
-    ["query", "console", "lint", "mcp"].each do |command|
+    ["query", "console", "dead_code", "lint", "mcp"].each do |command|
       result = rdx(command, "--bogus-flag")
 
       refute_success_status(result)
@@ -444,6 +448,125 @@ class CLITest < Minitest::Test
     assert_empty_stdout(result)
     assert_stderr_includes(result, "unexpected argument: workspace")
     assert_stderr_includes(result, "Usage: rdx lint")
+  end
+
+  def test_dead_code_groups_ranges_by_candidate_name_and_prints_a_summary
+    with_context do |context|
+      context.write!("z.rb", <<~RUBY)
+        class Used; end
+        Used.new
+        class Unused
+        end
+      RUBY
+      context.write!("a.rb", <<~RUBY)
+        module UnusedModule
+        end
+        UNUSED = 1
+      RUBY
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      # Index only the fixture files so installed gems and RBS definitions do not affect the report.
+      Rubydex::Graph.any_instance.stubs(:workspace_paths).returns(context.glob("**/*.rb"))
+      result = rdx("dead_code")
+
+      assert_success_status(result)
+      assert_stdout_equals(<<~OUTPUT, result)
+        UNUSED
+          a.rb:3,1-3,7
+
+        Unused
+          z.rb:3,1-4,4
+
+        UnusedModule
+          a.rb:1,1-2,4
+
+        3 files inspected, 3 dead code candidates found
+      OUTPUT
+      assert_match(/\ALooking for potentially dead code\.\.\.\nIndexing workspace\.\.\./, result.err, result.to_s)
+      assert_stderr_includes(result, "Resolving graph...")
+    end
+  end
+
+  def test_dead_code_prints_all_definitions_but_counts_each_candidate_once
+    with_context do |context|
+      context.write!("z.rb", "class Unused; end\n")
+      context.write!("a.rb", "class Unused; end\n")
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      Rubydex::Graph.any_instance.stubs(:workspace_paths).returns(context.glob("**/*.rb"))
+      result = rdx("dead_code")
+
+      assert_success_status(result)
+      assert_stdout_equals(<<~OUTPUT, result)
+        Unused
+          a.rb:1,1-1,18
+          z.rb:1,1-1,18
+
+        3 files inspected, 1 dead code candidate found
+      OUTPUT
+    end
+  end
+
+  def test_dead_code_includes_candidates_outside_the_workspace
+    with_context do |workspace|
+      with_context do |dependency|
+        dependency.write!("unused.rb", "class Unused; end\n")
+
+        Bundler.stubs(:root).returns(Pathname.new(workspace.absolute_path))
+        Rubydex::Graph.any_instance.stubs(:workspace_paths).returns(dependency.glob("**/*.rb"))
+        result = rdx("dead_code")
+
+        assert_success_status(result)
+        assert_stdout_equals(<<~OUTPUT, result)
+          Unused
+            #{dependency.absolute_path_to("unused.rb")}:1,1-1,18
+
+          2 files inspected, 1 dead code candidate found
+        OUTPUT
+      end
+    end
+  end
+
+  def test_dead_code_prints_a_summary_when_there_are_no_candidates
+    with_context do |context|
+      context.write!("app.rb", "class Used; end\nUsed.new\n")
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      Rubydex::Graph.any_instance.stubs(:workspace_paths).returns(context.glob("**/*.rb"))
+      result = rdx("dead_code")
+
+      assert_success_status(result)
+      assert_stdout_equals("2 files inspected, no dead code candidates found\n", result)
+    end
+  end
+
+  def test_dead_code_uses_the_current_directory_without_a_bundle
+    with_context do |context|
+      context.write!("app.rb", "class Unused; end\n")
+
+      Bundler.stubs(:root).raises(Bundler::GemfileNotFound)
+      Rubydex::Graph.any_instance.stubs(:workspace_paths).returns(context.glob("**/*.rb"))
+      result = rdx("dead_code", chdir: context.absolute_path)
+
+      assert_success_status(result)
+      assert_stdout_equals(<<~OUTPUT, result)
+        Unused
+          app.rb:1,1-1,18
+
+        2 files inspected, 1 dead code candidate found
+      OUTPUT
+    end
+  end
+
+  def test_dead_code_rejects_a_workspace_argument
+    result = rdx("dead_code", "workspace")
+
+    refute_success_status(result)
+    assert_empty_stdout(result)
+    assert_stderr_includes(result, "unexpected argument: workspace")
+    assert_stderr_includes(result, "Usage: rdx dead_code")
+    refute_stderr_includes(result, "Looking for potentially dead code...")
+    refute_stderr_includes(result, "Indexing workspace...")
   end
 
   def test_lint_reports_a_rule_diagnostic_with_related_information

@@ -157,6 +157,16 @@ puts Rubydex::Query.schema("table")
 
 See the [linter docs](docs/linter.md).
 
+### Dead code candidates
+
+```bash
+bundle exec rdx dead_code
+```
+
+Prints a list of potentially dead code candidates. The list is composed of all declarations for which the analysis found no references for in the codebase.
+
+Since some declarations may be used through meta-programming or otherwise untyped code, there may be false positives and the removal of candidates must be done carefully with context about the codebase.
+
 ### MCP server
 
 Rubydex can run as an MCP (Model Context Protocol) server, enabling AI assistants
