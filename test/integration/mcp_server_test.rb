@@ -94,6 +94,10 @@ class MCPServerIntegrationTest < Minitest::Test
         search_response = call_tool(stdin, stdout, request_id + 1, "search_declarations", { query: "Dog", match_mode: "exact" })
         assert_equal(["Dog"], search_response.fetch("results").map { |result| result.fetch("name") })
 
+        dead_code_response = call_tool(stdin, stdout, request_id + 2, "find_dead_code_candidates", { limit: 1 })
+        assert_operator(dead_code_response.fetch("total"), :>=, 1)
+        assert_equal(1, dead_code_response.fetch("candidates").length)
+
         stdin.close
         Timeout.timeout(30) { wait_thr.value }
         stderr_reader.join
@@ -184,6 +188,7 @@ class MCPServerIntegrationTest < Minitest::Test
       [
         "codebase_stats",
         "find_constant_references",
+        "find_dead_code_candidates",
         "get_declaration",
         "get_descendants",
         "get_file_declarations",

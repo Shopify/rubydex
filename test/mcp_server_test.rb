@@ -78,6 +78,68 @@ class MCPServerTest < Minitest::Test
     assert_equal({}, response.fetch(:result))
   end
 
+  def test_find_dead_code_candidates_reports_indexing_until_graph_is_ready
+    server = Rubydex::MCPServer::Server.new(root_path: Dir.pwd)
+
+    response = server.handle(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "find_dead_code_candidates" },
+      },
+    )
+
+    result = response.fetch(:result)
+    payload = JSON.parse(result.fetch(:content)[0].fetch(:text))
+
+    assert_equal(false, result.fetch(:isError))
+    assert_equal("indexing", payload.fetch("error"))
+    assert_match(/still indexing/, payload.fetch("message"))
+    assert_match(/retry/, payload.fetch("suggestion"))
+  end
+
+  def test_find_dead_code_candidates_dispatches_pagination_arguments
+    with_context do |context|
+      context.write!("app.rb", "class Charlie; end\nclass Bravo; end\nclass Alpha; end\n")
+      graph = Rubydex::Graph.configure_for_workspace(context.absolute_path)
+      assert_empty(graph.index_all([context.absolute_path]))
+      graph.resolve
+
+      server = Rubydex::MCPServer::Server.new(root_path: context.absolute_path)
+      server.stubs(:graph_or_error).returns(graph)
+
+      response = server.handle(
+        {
+          jsonrpc: "2.0",
+          id: "dead-code-page",
+          method: "tools/call",
+          params: {
+            name: "find_dead_code_candidates",
+            arguments: { "limit" => 1, "offset" => 1 },
+          },
+        },
+      )
+
+      assert_equal("2.0", response.fetch(:jsonrpc))
+      assert_equal("dead-code-page", response.fetch(:id))
+      result = response.fetch(:result)
+      assert_equal(false, result.fetch(:isError))
+      assert_equal(1, result.fetch(:content).length)
+      content = result.fetch(:content).fetch(0)
+      assert_equal("text", content.fetch(:type))
+      assert_equal(
+        {
+          "candidates" => [
+            { "name" => "Bravo", "kind" => "Class", "locations" => [{ "path" => "app.rb", "line" => 2 }] },
+          ],
+          "total" => 3,
+        },
+        JSON.parse(content.fetch(:text)),
+      )
+    end
+  end
+
   def test_unknown_method_returns_json_rpc_method_error
     server = Rubydex::MCPServer::Server.new(root_path: Dir.pwd)
 

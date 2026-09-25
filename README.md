@@ -208,6 +208,7 @@ like Claude to semantically query your Ruby codebase.
 | `get_declaration` | Full details by fully qualified name with docs, ancestors, members |
 | `get_descendants` | What classes/modules inherit from or include this one |
 | `find_constant_references` | All precise, resolved constant references across the codebase |
+| `find_dead_code_candidates` | List of potentially unused code |
 | `get_file_declarations` | List declarations defined in a specific file |
 | `codebase_stats` | High-level statistics about the indexed codebase |
 
