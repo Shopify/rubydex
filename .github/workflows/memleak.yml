@@ -3,6 +3,7 @@ name: Memleak
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     paths:
       - ".github/workflows/memleak.yml"
       - "rust/**"
