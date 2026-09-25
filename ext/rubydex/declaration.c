@@ -22,6 +22,41 @@ VALUE cMethod;
 VALUE cGlobalVariable;
 VALUE cInstanceVariable;
 VALUE cClassVariable;
+static VALUE mRubydexModule;
+
+static void validate_expected_type(VALUE expected_type) {
+    Check_Type(expected_type, T_CLASS);
+    if (!RTEST(rb_class_inherited_p(expected_type, cDeclaration))) {
+        rb_raise(rb_eTypeError, "expected expected_type to inherit from Rubydex::Declaration");
+    }
+}
+
+static void ensure_declaration_matches_expected_type(const CDeclaration *decl, VALUE expected_type, const char *name) {
+    if (decl == NULL || NIL_P(expected_type)) {
+        return;
+    }
+
+    VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
+    if (!RTEST(rb_class_inherited_p(decl_class, expected_type))) {
+        free_c_declaration(decl);
+
+        VALUE error_class = rb_const_get(mRubydexModule, rb_intern("Error"));
+        rb_raise(error_class, "Expected %s to be a %s, got %s", name, rb_class2name(expected_type),
+                 rb_class2name(decl_class));
+    }
+}
+
+static VALUE wrap_declaration(HandleData *data, const CDeclaration *decl) {
+    if (decl == NULL) {
+        return Qnil;
+    }
+
+    VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
+    VALUE argv[] = {data->graph_obj, ULL2NUM(decl->id)};
+    free_c_declaration(decl);
+
+    return rb_class_new_instance(2, argv, decl_class);
+}
 
 // Keep this in sync with declaration_api.rs
 VALUE rdxi_declaration_class_for_kind(CDeclarationKind kind) {
@@ -141,33 +176,38 @@ static VALUE rdxr_declaration_definitions(VALUE self) {
 
 /*
  * call-seq:
- *   member(name) -> Rubydex::Declaration?
+ *   member(name, expected_type: Rubydex::Declaration) -> Rubydex::Declaration?
  *
  * Returns a declaration handle for the named member, or nil if no member exists.
  */
-static VALUE rdxr_declaration_member(VALUE self, VALUE name) {
+static VALUE rdxr_declaration_member(int argc, VALUE *argv, VALUE self) {
+    VALUE name, opts;
+    rb_scan_args(argc, argv, "1:", &name, &opts);
+    Check_Type(name, T_STRING);
+
+    VALUE expected_type = Qnil;
+    if (!NIL_P(opts)) {
+        ID kwarg_id = rb_intern("expected_type");
+        VALUE kwarg_val;
+        rb_get_kwargs(opts, &kwarg_id, 0, 1, &kwarg_val);
+
+        if (kwarg_val != Qundef) {
+            expected_type = kwarg_val;
+            validate_expected_type(expected_type);
+        }
+    }
+
     HandleData *data;
     void *graph = rdxi_graph_from_handle(self, &data);
-
-    if (TYPE(name) != T_STRING) {
-        rb_raise(rb_eTypeError, "expected String");
-    }
-
-    const CDeclaration *decl = rdx_declaration_member(graph, data->id, StringValueCStr(name));
-    if (decl == NULL) {
-        return Qnil;
-    }
-
-    VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
-    VALUE argv[] = {data->graph_obj, ULL2NUM(decl->id)};
-    free_c_declaration(decl);
-
-    return rb_class_new_instance(2, argv, decl_class);
+    const char *member_name = StringValueCStr(name);
+    const CDeclaration *decl = rdx_declaration_member(graph, data->id, member_name);
+    ensure_declaration_matches_expected_type(decl, expected_type, member_name);
+    return wrap_declaration(data, decl);
 }
 
 /*
  * call-seq:
- *   find_member(name, only_inherited: false) -> Rubydex::Declaration?
+ *   find_member(name, only_inherited: false, expected_type: Rubydex::Declaration) -> Rubydex::Declaration?
  *
  * Searches for a member in the declaration's ancestor chain.
  */
@@ -177,29 +217,29 @@ static VALUE rdxr_declaration_find_member(int argc, VALUE *argv, VALUE self) {
     Check_Type(member, T_STRING);
 
     bool only_inherited = false;
+    VALUE expected_type = Qnil;
     if (!NIL_P(opts)) {
-        ID kwarg_id = rb_intern("only_inherited");
-        VALUE kwarg_val;
-        rb_get_kwargs(opts, &kwarg_id, 0, 1, &kwarg_val);
+        ID kwarg_ids[] = {rb_intern("only_inherited"), rb_intern("expected_type")};
+        VALUE kwarg_vals[2];
+        rb_get_kwargs(opts, kwarg_ids, 0, 2, kwarg_vals);
 
-        if (kwarg_val != Qundef) {
-            only_inherited = RTEST(kwarg_val);
+        if (kwarg_vals[0] != Qundef) {
+            only_inherited = RTEST(kwarg_vals[0]);
+        }
+
+        if (kwarg_vals[1] != Qundef) {
+            expected_type = kwarg_vals[1];
+            validate_expected_type(expected_type);
         }
     }
 
     HandleData *data;
     void *graph = rdxi_graph_from_handle(self, &data);
 
-    const CDeclaration *decl = rdx_declaration_find_member(graph, data->id, StringValueCStr(member), only_inherited);
-    if (decl == NULL) {
-        return Qnil;
-    }
-
-    VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
-    VALUE result_argv[] = {data->graph_obj, ULL2NUM(decl->id)};
-    free_c_declaration(decl);
-
-    return rb_class_new_instance(2, result_argv, decl_class);
+    const char *member_name = StringValueCStr(member);
+    const CDeclaration *decl = rdx_declaration_find_member(graph, data->id, member_name, only_inherited);
+    ensure_declaration_matches_expected_type(decl, expected_type, member_name);
+    return wrap_declaration(data, decl);
 }
 
 /*
@@ -471,6 +511,8 @@ static VALUE rdxr_constant_alias_target(VALUE self) {
 }
 
 void rdxi_initialize_declaration(VALUE mRubydex) {
+    mRubydexModule = mRubydex;
+
     cDeclaration = rb_define_class_under(mRubydex, "Declaration", rb_cObject);
     cNamespace = rb_define_class_under(mRubydex, "Namespace", cDeclaration);
     cClass = rb_define_class_under(mRubydex, "Class", cNamespace);
@@ -493,7 +535,7 @@ void rdxi_initialize_declaration(VALUE mRubydex) {
 
     // Namespace only methods
     rb_define_method(cNamespace, "references", rdxr_constant_declaration_references, 0);
-    rb_define_method(cNamespace, "member", rdxr_declaration_member, 1);
+    rb_define_method(cNamespace, "member", rdxr_declaration_member, -1);
     rb_define_method(cNamespace, "find_member", rdxr_declaration_find_member, -1);
     rb_define_method(cNamespace, "singleton_class", rdxr_declaration_singleton_class, 0);
     rb_define_method(cNamespace, "ancestors", rdxr_declaration_ancestors, 0);

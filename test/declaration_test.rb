@@ -698,6 +698,56 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_member_accepts_expected_type
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Parent
+          def foo; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      parent = graph["Parent"]
+      method = parent.member("foo()", expected_type: Rubydex::Method)
+      assert_instance_of(Rubydex::Method, method)
+      assert_equal("Parent#foo()", method.name)
+
+      assert_raises(Rubydex::Error) do
+        parent.member("foo()", expected_type: Rubydex::InstanceVariable)
+      end
+    end
+  end
+
+  def test_find_member_accepts_expected_type
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Parent
+          def foo; end
+        end
+
+        class Child < Parent; end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      child = graph["Child"]
+      method = child.find_member("foo()", expected_type: Rubydex::Method)
+      assert_instance_of(Rubydex::Method, method)
+      assert_equal("Parent#foo()", method.name)
+
+      assert_raises(Rubydex::Error) do
+        child.find_member("foo()", expected_type: Rubydex::InstanceVariable)
+      end
+
+      assert_nil(child.find_member("missing", expected_type: Rubydex::Method))
+    end
+  end
+
   def test_following_constant_alias_targets
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)

@@ -116,11 +116,26 @@ class Rubydex::Namespace < Rubydex::Declaration
   sig { returns(T::Enumerable[Rubydex::Declaration]) }
   def members; end
 
-  sig { params(name: String).returns(T.nilable(Rubydex::Declaration)) }
-  def member(name); end
+  sig do
+    type_parameters(:U)
+      .params(
+        name: String,
+        expected_type: T::Class[T.all(T.type_parameter(:U), Rubydex::Declaration)],
+      )
+      .returns(T.nilable(T.all(T.type_parameter(:U), Rubydex::Declaration)))
+  end
+  def member(name, expected_type: Rubydex::Declaration); end
 
-  sig { params(name: String, only_inherited: T::Boolean).returns(T.nilable(Rubydex::Declaration)) }
-  def find_member(name, only_inherited: false); end
+  sig do
+    type_parameters(:U)
+      .params(
+        name: String,
+        only_inherited: T::Boolean,
+        expected_type: T::Class[T.all(T.type_parameter(:U), Rubydex::Declaration)],
+      )
+      .returns(T.nilable(T.all(T.type_parameter(:U), Rubydex::Declaration)))
+  end
+  def find_member(name, only_inherited: false, expected_type: Rubydex::Declaration); end
 
   sig { returns(T.nilable(Rubydex::SingletonClass)) }
   def singleton_class; end
