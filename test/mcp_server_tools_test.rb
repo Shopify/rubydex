@@ -89,6 +89,116 @@ class MCPServerToolsTest < Minitest::Test
     end
   end
 
+  def test_find_dead_code_candidates_tool
+    with_context do |context|
+      context.write!("app.rb", <<~RUBY)
+        class Used; end
+        Used.new
+
+        class Unused
+          def unused_method; end
+        end
+
+        module UnusedModule; end
+        UNUSED = 1
+      RUBY
+      graph, errors = indexed_graph(context.absolute_path, [context.absolute_path])
+      assert_empty(errors)
+
+      result = call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool)
+
+      assert_equal(
+        {
+          "candidates" => [
+            { "name" => "UNUSED", "kind" => "Constant", "locations" => [{ "path" => "app.rb", "line" => 9 }] },
+            { "name" => "Unused", "kind" => "Class", "locations" => [{ "path" => "app.rb", "line" => 4 }] },
+            { "name" => "UnusedModule", "kind" => "Module", "locations" => [{ "path" => "app.rb", "line" => 8 }] },
+          ],
+          "total" => 3,
+        },
+        result,
+      )
+    end
+  end
+
+  def test_find_dead_code_candidates_includes_all_definitions
+    with_context do |context|
+      context.write!("z.rb", "class Unused; end\n")
+      context.write!("a.rb", "class Unused; end\n")
+      graph, errors = indexed_graph(context.absolute_path, [context.absolute_path])
+      assert_empty(errors)
+
+      result = call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool)
+
+      assert_equal(1, result.fetch("total"))
+      assert_equal(
+        [{ "path" => "a.rb", "line" => 1 }, { "path" => "z.rb", "line" => 1 }],
+        result.fetch("candidates").fetch(0).fetch("locations"),
+      )
+    end
+  end
+
+  def test_find_dead_code_candidates_preserves_nested_names_and_alias_kinds
+    with_context do |context|
+      context.write!("app.rb", <<~RUBY)
+        module Example
+          class Target; end
+          AliasName = Target
+          class Used; end
+          class Unused; end
+        end
+      RUBY
+      context.write!("consumer.rb", "Example::Used.new\n")
+      graph, errors = indexed_graph(context.absolute_path, [context.absolute_path])
+      assert_empty(errors)
+
+      result = call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool)
+
+      assert_equal(
+        {
+          "candidates" => [
+            {
+              "name" => "Example::AliasName",
+              "kind" => "ConstantAlias",
+              "locations" => [{ "path" => "app.rb", "line" => 3 }],
+            },
+            {
+              "name" => "Example::Unused",
+              "kind" => "Class",
+              "locations" => [{ "path" => "app.rb", "line" => 5 }],
+            },
+          ],
+          "total" => 2,
+        },
+        result,
+      )
+    end
+  end
+
+  def test_find_dead_code_candidates_paginates_in_name_order
+    with_context do |context|
+      names = 103.times.map { |index| format("Unused%03d", index) }
+      context.write!("app.rb", names.reverse.map { |name| "class #{name}; end" }.join("\n"))
+      graph, errors = indexed_graph(context.absolute_path, [context.absolute_path])
+      assert_empty(errors)
+
+      default_page = call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool)
+      assert_equal(103, default_page.fetch("total"))
+      assert_equal(names.first(50), default_page.fetch("candidates").map { |candidate| candidate.fetch("name") })
+
+      capped_page = call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool, limit: 500)
+      assert_equal(103, capped_page.fetch("total"))
+      assert_equal(names.first(100), capped_page.fetch("candidates").map { |candidate| candidate.fetch("name") })
+
+      last_page = call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool, offset: 100)
+      assert_equal(103, last_page.fetch("total"))
+      assert_equal(names.last(3), last_page.fetch("candidates").map { |candidate| candidate.fetch("name") })
+
+      past_end = call_tool(graph, Rubydex::MCPServer::FindDeadCodeCandidatesTool, offset: 103)
+      assert_equal({ "candidates" => [], "total" => 103 }, past_end)
+    end
+  end
+
   def test_get_file_declarations_tool
     with_graph do |graph|
       file = call_tool(graph, Rubydex::MCPServer::GetFileDeclarationsTool, file_path: "app.rb")
