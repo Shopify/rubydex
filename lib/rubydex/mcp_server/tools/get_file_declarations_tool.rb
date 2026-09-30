@@ -4,10 +4,10 @@ module Rubydex
   module MCPServer
     class GetFileDeclarationsTool < BaseTool
       tool_name "get_file_declarations"
-      description "List all Ruby classes, modules, methods, and constants defined in a specific file. Returns a structural overview with names, kinds, and line numbers. Use this to understand a file's structure before reading it, or to see what a file contributes to the codebase. Accepts relative or absolute paths."
+      description "List Ruby declarations defined in an indexed file."
       input_schema(
         properties: {
-          file_path: { type: "string", description: "File path (relative or absolute) to list declarations for" },
+          file_path: { type: "string", description: "Absolute path or path relative to the workspace root" },
         },
         required: ["file_path"],
       )

@@ -4,11 +4,11 @@ module Rubydex
   module MCPServer
     class FindDeadCodeCandidatesTool < BaseTool
       tool_name "find_dead_code_candidates"
-      description "Find Ruby classes, modules, and constants with no detected references. Returns candidate names, kinds, and definition locations, including dependency definitions. Candidates may still be used through DSLs or metaprogramming; verify before deleting code. Results are paginated: the response includes `total`. If `total` exceeds the number of returned candidates, use `offset` to fetch subsequent pages."
+      description "Find Ruby classes, modules, and constants with no detected references, including dependency code. Dynamic usage through DSLs or metaprogramming may not be detected."
       input_schema(
         properties: {
-          limit: { type: "integer", description: "Maximum number of candidates to return (default 50, max 100)" },
-          offset: { type: "integer", description: "Number of candidates to skip for pagination (default 0)" },
+          limit: { type: "integer", description: "Page size (default 50, capped at 100)" },
+          offset: { type: "integer", description: "Number of results to skip (default 0)" },
         },
       )
 

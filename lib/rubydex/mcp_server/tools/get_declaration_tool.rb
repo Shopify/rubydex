@@ -4,10 +4,10 @@ module Rubydex
   module MCPServer
     class GetDeclarationTool < BaseTool
       tool_name "get_declaration"
-      description 'Get complete information about a Ruby class, module, method, or constant by its exact fully qualified name. Returns file locations, documentation comments, ancestor chain, and members with locations. FQN format: "Foo::Bar" for classes/modules/constants, "Foo::Bar#method_name" for instance methods, "Foo::Bar::<Bar>" for singleton classes, and "Foo::Bar::<Bar>#method_name" for class methods.'
+      description "Get a Ruby declaration's definition locations, documentation, ancestors, and members."
       input_schema(
         properties: {
-          name: { type: "string", description: "Fully qualified name of the declaration (e.g. 'Foo::Bar', 'Foo::Bar#baz')" },
+          name: { type: "string", description: 'Exact fully qualified name: "Foo::Bar", "Foo::Bar#method_name()" (instance method), "Foo::Bar::<Bar>" (singleton class), or "Foo::Bar::<Bar>#method_name()" (class method)' },
         },
         required: ["name"],
       )
