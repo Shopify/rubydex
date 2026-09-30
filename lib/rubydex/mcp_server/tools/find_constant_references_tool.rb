@@ -4,12 +4,12 @@ module Rubydex
   module MCPServer
     class FindConstantReferencesTool < BaseTool
       tool_name "find_constant_references"
-      description "Find all resolved references to a Ruby class, module, or constant across the codebase. Returns file paths, line numbers, and columns for each usage. Results are paginated: the response includes `total`. If `total` exceeds the number of returned results, use `offset` to fetch subsequent pages."
+      description "Locate resolved references to a Ruby class, module, or constant."
       input_schema(
         properties: {
-          name: { type: "string", description: "Fully qualified name of the class, module, or constant to find references for" },
-          limit: { type: "integer", description: "Maximum number of references to return (default 50, max 200)" },
-          offset: { type: "integer", description: "Number of references to skip for pagination (default 0)" },
+          name: { type: "string", description: "Fully qualified class, module, or constant name" },
+          limit: { type: "integer", description: "Page size (default 50, capped at 200)" },
+          offset: { type: "integer", description: "Number of results to skip (default 0)" },
         },
         required: ["name"],
       )

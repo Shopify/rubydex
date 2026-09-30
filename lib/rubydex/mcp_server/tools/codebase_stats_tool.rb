@@ -4,7 +4,7 @@ module Rubydex
   module MCPServer
     class CodebaseStatsTool < BaseTool
       tool_name "codebase_stats"
-      description "Get an overview of the indexed Ruby codebase: total file count, declaration counts, and breakdown by kind (classes, modules, methods, constants). Use this to understand codebase size and composition, or to verify that indexing completed successfully."
+      description "Count indexed files, declarations, definitions, and references, with declarations grouped by kind."
       input_schema(properties: {})
 
       #: -> Tool::Response

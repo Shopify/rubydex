@@ -10,15 +10,8 @@ Dir[File.join(__dir__, "mcp_server", "tools", "*_tool.rb")].sort.each { |file| r
 module Rubydex
   module MCPServer
     SERVER_INSTRUCTIONS = <<~TEXT
-      Rubydex provides semantic Ruby code intelligence.
-
-      Use these tools for Ruby source files (.rb, .rbi, .rbs) when you need structural information about declarations, locations, hierarchy, references, or codebase composition.
-
-      Use text search instead for literal strings, comments, log messages, non-Ruby files, or content search rather than structural queries.
-
-      Fully qualified name format: "Foo::Bar" for classes/modules/constants, "Foo::Bar#method_name" for instance methods.
-
-      Pagination: tools that may return a high number of results include `total` for pagination. When `total` exceeds the number of returned items, use `offset` to fetch the next page.
+      Tools query a static index of workspace code, available bundle dependencies, and available Ruby core and standard-library RBS definitions.
+      The index is built at server startup and does not track file changes; restart the server to refresh it.
     TEXT
 
     class Server

@@ -4,12 +4,12 @@ module Rubydex
   module MCPServer
     class GetDescendantsTool < BaseTool
       tool_name "get_descendants"
-      description "Returns all known descendants for the given namespace including itself and all transitive descendants. Can be used to understand how a module/class is used across the codebase. Results are paginated: the response includes `total`. If `total` exceeds the number of returned results, use `offset` to fetch subsequent pages."
+      description "List a class or module and its known descendants, including transitive descendants."
       input_schema(
         properties: {
-          name: { type: "string", description: "Fully qualified name of the class or module" },
-          limit: { type: "integer", description: "Maximum number of descendants to return (default 50, max 500)" },
-          offset: { type: "integer", description: "Number of descendants to skip for pagination (default 0)" },
+          name: { type: "string", description: "Fully qualified class or module name" },
+          limit: { type: "integer", description: "Page size (default 50, capped at 500)" },
+          offset: { type: "integer", description: "Number of results to skip (default 0)" },
         },
         required: ["name"],
       )

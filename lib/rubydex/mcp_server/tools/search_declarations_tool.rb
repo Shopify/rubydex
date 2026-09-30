@@ -4,14 +4,14 @@ module Rubydex
   module MCPServer
     class SearchDeclarationsTool < BaseTool
       tool_name "search_declarations"
-      description 'Search for Ruby classes, modules, methods, or constants by name. Use this INSTEAD OF Grep when you know part of a Ruby identifier name and want to find its definition. Returns fully qualified names, kinds, and file locations. Use the `kind` filter ("Class", "Module", "Method", "Constant") to narrow results. Set `match_mode` to "exact" for precise substring matching or "fuzzy" for LSP-style workspace symbol search (default). Results are paginated: the response includes `total` (the full count of matches). If `total` exceeds the number of returned results, use `offset` to fetch subsequent pages.'
+      description "Find definitions of Ruby classes, modules, methods, or constants by full or partial name."
       input_schema(
         properties: {
-          query: { type: "string", description: "Search query to match against declaration names" },
-          kind: { type: "string", description: "Filter by declaration kind: Class, Module, Method, Constant, etc." },
-          match_mode: { type: "string", description: 'Matching mode: "fuzzy" (default) for LSP-style workspace symbol search, or "exact" for precise substring matching' },
-          limit: { type: "integer", description: "Maximum number of results to return (default 50, max 100)" },
-          offset: { type: "integer", description: "Number of results to skip for pagination (default 0)" },
+          query: { type: "string", description: "Text to match against fully qualified names. An empty string matches all declarations." },
+          kind: { type: "string", description: "Case-insensitive declaration kind, such as Class, Module, Method, or Constant" },
+          match_mode: { type: "string", description: '"fuzzy" (default) matches characters in order, ignoring ASCII case. "exact" matches a case-sensitive substring.' },
+          limit: { type: "integer", description: "Page size (default 50, capped at 100)" },
+          offset: { type: "integer", description: "Number of results to skip (default 0)" },
         },
         required: ["query"],
       )
