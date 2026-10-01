@@ -203,7 +203,7 @@ mod tests {
         let mut graph = Graph::new();
         let errors = index_files(&mut graph, vec![relative_to_pwd.clone()], IndexerBackend::RubyIndexer);
 
-        assert!(errors.is_empty());
+        assert_eq!(errors.as_slice(), []);
         assert_eq!(graph.documents().len(), 2);
     }
 

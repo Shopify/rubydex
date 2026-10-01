@@ -3,11 +3,13 @@
 macro_rules! assert_mem_size {
     ($struct:ident, $size:expr) => {
         // Check struct name on this assert! error
+        #[cfg(target_pointer_width = "64")]
         const _: () = assert!(
             std::mem::size_of::<$struct>() == $size,
             concat!("Incorrect size for `", stringify!($struct), "`")
         );
         // Check actual size on this array error
+        #[cfg(target_pointer_width = "64")]
         const _: [(); $size] = [(); std::mem::size_of::<$struct>()];
     };
 }

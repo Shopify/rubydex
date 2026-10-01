@@ -433,7 +433,7 @@ mod tests {
 
         let other = rules.iter().find(|rule| rule.name() == "Other").unwrap();
         assert!(!other.enabled());
-        assert!(other.exclude_patterns().is_empty());
+        assert_eq!(other.exclude_patterns(), []);
         assert_eq!(other.severity(), None);
     }
 
