@@ -5413,3 +5413,304 @@ mod name_dependent_tests {
         assert_dependents!(&context, "Foo", [NestedName("Bar"), ChildName("Baz")]);
     }
 }
+
+mod without_method_references_tests {
+    use super::*;
+    use crate::{
+        indexing::{IndexingOptions, LanguageId, build_local_graph_with_options},
+        integrity::check_integrity,
+        model::{
+            graph::Graph,
+            ids::{DeclarationId, UriId},
+        },
+        resolution::Resolver,
+        test_utils::normalize_indentation,
+    };
+
+    const URI: &str = "file:///without-method-references.rb";
+
+    fn index(source: &str, collect_method_references: bool) -> LocalGraphTest {
+        let source = normalize_indentation(source);
+        let graph = build_local_graph_with_options(
+            URI.into(),
+            &source,
+            &LanguageId::Ruby,
+            super::super::backend(),
+            IndexingOptions {
+                collect_method_references,
+            },
+        );
+        LocalGraphTest::from_local_graph(URI, &source, graph)
+    }
+
+    fn resolve(source: &str, collect_method_references: bool) -> Graph {
+        let source = normalize_indentation(source);
+        let mut graph = Graph::new();
+        graph.extend(build_local_graph_with_options(
+            URI.into(),
+            &source,
+            &LanguageId::Ruby,
+            super::super::backend(),
+            IndexingOptions {
+                collect_method_references,
+            },
+        ));
+        Resolver::new(&mut graph).resolve();
+        assert_eq!(check_integrity(&graph), []);
+        graph
+    }
+
+    fn written_answers(graph: &Graph, source: &str) -> Vec<(UriId, u32, u32, Option<DeclarationId>)> {
+        let mut answers = graph
+            .constant_references()
+            .values()
+            .filter_map(|reference| {
+                let offset = reference.offset();
+                let name = graph.names().get(reference.name_id())?;
+                let text = graph.strings().get(name.str())?.as_str();
+                (source.get(offset.start() as usize..offset.end() as usize) == Some(text)).then(|| {
+                    (
+                        reference.uri_id(),
+                        offset.start(),
+                        offset.end(),
+                        graph.name_id_to_declaration_id(*reference.name_id()).copied(),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        answers.sort_unstable();
+        answers
+    }
+
+    fn assert_written_answers_equal(source: &str) {
+        let source = normalize_indentation(source);
+        let full = resolve(&source, true);
+        let reduced = resolve(&source, false);
+        assert_eq!(written_answers(&full, &source), written_answers(&reduced, &source));
+    }
+
+    #[test]
+    fn calls_assignments_operators_and_symbol_blocks_omit_method_references() {
+        let source = "class A; end
+A.work(A)
+A.work += A
+A.work &&= A
+A.work ||= A
+A.work, A.other = A, A
+A && A
+A || A
+A.work(&:start)
+A < A
+";
+        let context = index(source, false);
+        assert!(context.graph().method_references().is_empty());
+        let mut offsets = context
+            .graph()
+            .constant_references()
+            .values()
+            .map(|reference| {
+                assert_eq!(context.source_at(reference.offset()), "A");
+                reference.offset().start()
+            })
+            .collect::<Vec<_>>();
+        offsets.sort_unstable();
+        assert_eq!(
+            offsets,
+            source
+                .match_indices('A')
+                .skip(1)
+                .map(|(start, _)| start as u32)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !context
+                .graph()
+                .strings()
+                .values()
+                .any(|string| string.as_str() == "<A>")
+        );
+        assert!(
+            !context
+                .graph()
+                .names()
+                .values()
+                .any(|name| { matches!(name.parent_scope(), crate::model::name::ParentScope::Attached(_)) })
+        );
+        assert_written_answers_equal(source);
+    }
+
+    #[test]
+    fn nested_receivers_arguments_and_blocks_keep_written_constant_offsets() {
+        let source = "class A; end
+class B; end
+class C; end
+class D; end
+class E; end
+A.work(B.run(C), &D)
+A.work(E) { B.run(C); D }
+A.work(&:symbol)
+";
+        let context = index(source, false);
+        assert!(context.graph().method_references().is_empty());
+        assert_constant_references_eq!(&context, ["A", "B", "C", "D", "A", "E", "B", "C", "D", "A"]);
+        for reference in context.graph().constant_references().values() {
+            let name = context.graph().names().get(reference.name_id()).unwrap();
+            let name = context.graph().strings().get(name.str()).unwrap().as_str();
+            assert_eq!(context.source_at(reference.offset()), name);
+        }
+        assert_written_answers_equal(source);
+    }
+
+    #[test]
+    fn aliases_keep_definitions_and_explicit_constant_receivers() {
+        let source = "class A
+  def old; end
+  alias fresh old
+  alias_method :another, :old
+end
+A.alias_method(:last, :old)
+";
+        let context = index(source, false);
+        assert_no_local_diagnostics!(&context);
+        assert!(context.graph().method_references().is_empty());
+        assert_constant_references_eq!(&context, ["A"]);
+        assert_eq!(
+            context
+                .graph()
+                .definitions()
+                .values()
+                .filter(|def| matches!(def, Definition::MethodAlias(_)))
+                .count(),
+            3
+        );
+        assert_written_answers_equal(source);
+    }
+
+    #[test]
+    fn class_module_singleton_mixin_and_visibility_definitions_survive() {
+        let source = "module Mix; end
+class A
+  VALUE = 1
+  include Mix
+  private_constant :VALUE
+  def self.work(value = Mix); VALUE; end
+  def A.read; Mix; end
+  class << A
+    def nested; Mix; end
+  end
+end
+GENERATED = Class.new(A) { def self.open; A; end }
+GROUP = Module.new { include Mix }
+Object.new
+GENERATED.open
+";
+        let context = index(source, false);
+        assert_no_local_diagnostics!(&context);
+        assert!(context.graph().method_references().is_empty());
+        let definitions = context.graph().definitions();
+        assert!(definitions.values().any(|def| matches!(def, Definition::Class(_))));
+        assert!(definitions.values().any(|def| matches!(def, Definition::Module(_))));
+        assert!(
+            definitions
+                .values()
+                .any(|def| matches!(def, Definition::SingletonClass(_)))
+        );
+        assert!(
+            definitions
+                .values()
+                .any(|def| matches!(def, Definition::ConstantVisibility(_)))
+        );
+        assert!(
+            definitions
+                .values()
+                .filter(|def| matches!(def, Definition::Method(method) if method.receiver().is_some()))
+                .count()
+                >= 3
+        );
+        assert_written_answers_equal(source);
+    }
+
+    #[test]
+    fn lexical_and_top_level_bindings_keep_declaration_identity() {
+        let source = "module Lexical
+  class Target; end
+  module Nested
+    def self.read; Target; end
+  end
+end
+class Lexical::Explicit
+  def self.read; Target; end
+end
+ROOT_LIMIT = 7
+class Reader
+  def self.read; ROOT_LIMIT; end
+end
+Object.new
+MADE = Object.new
+MADE.work
+";
+        let full = resolve(source, true);
+        let reduced = resolve(source, false);
+        let answers = written_answers(&reduced, source);
+        assert_eq!(written_answers(&full, source), answers);
+
+        for (needle, target) in [
+            ("def self.read; Target; end", Some("Lexical::Target")),
+            ("def self.read; ROOT_LIMIT; end", Some("ROOT_LIMIT")),
+            ("Object.new", Some("Object")),
+            ("MADE.work", Some("MADE")),
+        ] {
+            let start = source.find(needle).unwrap() + needle.find(|c: char| c.is_ascii_uppercase()).unwrap();
+            let word = source[start..]
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .next()
+                .unwrap();
+            assert!(
+                answers.contains(&(
+                    UriId::from(URI),
+                    start as u32,
+                    (start + word.len()) as u32,
+                    target.map(DeclarationId::from)
+                )),
+                "{needle}"
+            );
+        }
+        let compact = source.rfind("def self.read; Target; end").unwrap() + "def self.read; ".len();
+        assert!(answers.contains(&(UriId::from(URI), compact as u32, (compact + 6) as u32, None)));
+    }
+
+    #[test]
+    fn empty_and_malformed_sources_keep_parser_results_and_offsets() {
+        for source in ["", "class A\n"] {
+            let full = index(source, true);
+            let reduced = index(source, false);
+            assert_eq!(
+                full.graph()
+                    .definitions()
+                    .keys()
+                    .collect::<std::collections::HashSet<_>>(),
+                reduced
+                    .graph()
+                    .definitions()
+                    .keys()
+                    .collect::<std::collections::HashSet<_>>()
+            );
+            assert_eq!(
+                full.graph()
+                    .diagnostics()
+                    .iter()
+                    .map(|d| (d.rule(), d.offset(), d.message()))
+                    .collect::<Vec<_>>(),
+                reduced
+                    .graph()
+                    .diagnostics()
+                    .iter()
+                    .map(|d| (d.rule(), d.offset(), d.message()))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(full.graph().diagnostics().is_empty(), source.is_empty());
+            assert!(reduced.graph().method_references().is_empty());
+            assert_written_answers_equal(source);
+        }
+    }
+}

@@ -22,6 +22,21 @@ pub enum IndexerBackend {
     OperationBuilder,
 }
 
+/// Controls which references Ruby indexing collects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndexingOptions {
+    /// Whether to collect method-call references and their synthetic receivers.
+    pub collect_method_references: bool,
+}
+
+impl Default for IndexingOptions {
+    fn default() -> Self {
+        Self {
+            collect_method_references: true,
+        }
+    }
+}
+
 /// The language of a source document, used to dispatch to the appropriate indexer
 pub enum LanguageId {
     Ruby,
@@ -154,15 +169,27 @@ pub fn index_files(graph: &mut Graph, paths: Vec<PathBuf>, backend: IndexerBacke
 /// Indexes a source string using the appropriate indexer for the given language.
 #[must_use]
 pub fn build_local_graph(uri: Box<str>, source: &str, language: &LanguageId, backend: IndexerBackend) -> LocalGraph {
+    build_local_graph_with_options(uri, source, language, backend, IndexingOptions::default())
+}
+
+/// Indexes a source string with the specified reference collection options.
+#[must_use]
+pub fn build_local_graph_with_options(
+    uri: Box<str>,
+    source: &str,
+    language: &LanguageId,
+    backend: IndexerBackend,
+    options: IndexingOptions,
+) -> LocalGraph {
     match language {
         LanguageId::Ruby => match backend {
             IndexerBackend::RubyIndexer => {
-                let mut indexer = RubyIndexer::new(uri, source);
+                let mut indexer = RubyIndexer::new(uri, source).with_options(options);
                 indexer.index();
                 indexer.local_graph()
             }
             IndexerBackend::OperationBuilder => {
-                let builder = RubyOperationBuilder::new(uri, source);
+                let builder = RubyOperationBuilder::new(uri, source).with_options(options);
                 let result = builder.build();
                 crate::operation::applier::apply_operations(result)
             }
@@ -232,5 +259,47 @@ mod tests {
 
         assert_eq!(5, graph.definitions().len());
         assert_eq!(2, graph.documents().len());
+    }
+
+    #[test]
+    fn rbs_options_preserve_definitions_and_constant_references() {
+        use crate::{assert_def_name_eq, assert_def_str_eq, assert_definition_at, test_utils::LocalGraphTest};
+        use std::collections::HashSet;
+
+        let uri = "file:///example.rbs";
+        let source = "class Example\n  def value: () -> String\nend\n";
+        let context = |collect_method_references| {
+            let graph = build_local_graph_with_options(
+                uri.into(),
+                source,
+                &LanguageId::Rbs,
+                IndexerBackend::RubyIndexer,
+                IndexingOptions {
+                    collect_method_references,
+                },
+            );
+            LocalGraphTest::from_local_graph(uri, source, graph)
+        };
+        let full = context(true);
+        let reduced = context(false);
+
+        for graph in [&full, &reduced] {
+            assert_definition_at!(graph, "1:1-3:4", Class, |def| {
+                assert_def_name_eq!(graph, def, "Example");
+            });
+            assert_definition_at!(graph, "2:3-2:26", Method, |def| {
+                assert_def_str_eq!(graph, def, "value()");
+            });
+            assert!(graph.graph().method_references().is_empty());
+        }
+
+        assert_eq!(
+            full.graph().definitions().keys().collect::<HashSet<_>>(),
+            reduced.graph().definitions().keys().collect::<HashSet<_>>()
+        );
+        assert_eq!(
+            full.graph().constant_references().keys().collect::<HashSet<_>>(),
+            reduced.graph().constant_references().keys().collect::<HashSet<_>>()
+        );
     }
 }

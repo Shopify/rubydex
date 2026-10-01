@@ -1,6 +1,7 @@
 //! Visit the Ruby AST and create the definitions.
 
 use crate::diagnostic::Rule;
+use crate::indexing::IndexingOptions;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
@@ -85,6 +86,7 @@ pub struct RubyIndexer<'a> {
     uri_id: UriId,
     local_graph: LocalGraph,
     source: &'a str,
+    options: IndexingOptions,
     comments: Vec<CommentGroup>,
     nesting_stack: Vec<Nesting>,
     visibility_stack: Vec<VisibilityModifier>,
@@ -101,11 +103,18 @@ impl<'a> RubyIndexer<'a> {
             uri_id,
             local_graph,
             source,
+            options: IndexingOptions::default(),
             comments: Vec::new(),
             nesting_stack: Vec::new(),
             visibility_stack: vec![VisibilityModifier::new(Visibility::Private, false, Offset::new(0, 0))],
             pending_decorator_offset: None,
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_options(mut self, options: IndexingOptions) -> Self {
+        self.options = options;
+        self
     }
 
     #[must_use]
@@ -1016,6 +1025,13 @@ impl<'a> RubyIndexer<'a> {
 
     /// Indexes a method reference for a call node, creating constant references for the receiver when applicable.
     fn index_method_reference_for_call(&mut self, node: &ruby_prism::CallNode) {
+        if !self.options.collect_method_references {
+            if let Some(receiver) = node.receiver() {
+                self.visit(&receiver);
+            }
+            return;
+        }
+
         let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
 
         if method_receiver.is_none()
@@ -1780,14 +1796,19 @@ impl Visit<'_> for RubyIndexer<'_> {
                 }
                 ruby_prism::Node::CallTargetNode { .. } => {
                     let call_target_node = left.as_call_target_node().unwrap();
-                    let method_receiver = self.method_receiver(Some(&call_target_node.receiver()), left.location());
 
-                    if method_receiver.is_none() {
+                    if self.options.collect_method_references {
+                        let method_receiver = self.method_receiver(Some(&call_target_node.receiver()), left.location());
+
+                        if method_receiver.is_none() {
+                            self.visit(&call_target_node.receiver());
+                        }
+
+                        let name = String::from_utf8_lossy(call_target_node.name().as_slice()).to_string();
+                        self.index_method_reference(name, &call_target_node.location(), method_receiver);
+                    } else {
                         self.visit(&call_target_node.receiver());
                     }
-
-                    let name = String::from_utf8_lossy(call_target_node.name().as_slice()).to_string();
-                    self.index_method_reference(name, &call_target_node.location(), method_receiver);
                 }
                 _ => {}
             }
@@ -1991,9 +2012,9 @@ impl Visit<'_> for RubyIndexer<'_> {
             return;
         }
 
-        let message = String::from_utf8_lossy(node.name().as_slice()).to_string();
+        let message = String::from_utf8_lossy(node.name().as_slice());
 
-        match message.as_str() {
+        match message.as_ref() {
             "attr_accessor" => {
                 index_attr(AttrKind::Accessor, node);
             }
@@ -2059,12 +2080,23 @@ impl Visit<'_> for RubyIndexer<'_> {
                         recv @ (ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }),
                     ) => {
                         let name_id = self.index_constant_reference(recv, true);
-                        (name_id.map(Receiver::ConstantReceiver), name_id)
+                        let method_receiver = if self.options.collect_method_references {
+                            name_id
+                        } else {
+                            None
+                        };
+                        (name_id.map(Receiver::ConstantReceiver), method_receiver)
                     }
-                    _ => (None, self.method_receiver(recv_ref, node.location())),
+                    _ if self.options.collect_method_references => {
+                        (None, self.method_receiver(recv_ref, node.location()))
+                    }
+                    _ => (None, None),
                 };
-                let reference = MethodRef::new(old_name_str_id, self.uri_id, old_offset.clone(), method_receiver);
-                self.local_graph.add_method_reference(reference);
+
+                if self.options.collect_method_references {
+                    let reference = MethodRef::new(old_name_str_id, self.uri_id, old_offset.clone(), method_receiver);
+                    self.local_graph.add_method_reference(reference);
+                }
 
                 let offset = Offset::from_prism_location(&node.location());
                 let (comments, flags) = self.find_comments_for(offset.start());
@@ -2120,7 +2152,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     return;
                 }
 
-                let visibility = Visibility::from_string(message.as_str());
+                let visibility = Visibility::from_string(message.as_ref());
                 let offset = Offset::from_prism_location(&node.location());
 
                 if let Some(arguments) = node.arguments() {
@@ -2132,7 +2164,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         );
                         self.visit_arguments_node(&arguments);
                     } else {
-                        self.handle_visibility_arguments(&arguments, visibility, &offset, message.as_str());
+                        self.handle_visibility_arguments(&arguments, visibility, &offset, message.as_ref());
                     }
                 } else {
                     // Flag mode: `private` with no arguments
@@ -2209,76 +2241,96 @@ impl Visit<'_> for RubyIndexer<'_> {
                     self.visit(&block);
                 }
 
-                let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
+                if self.options.collect_method_references {
+                    let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
 
-                if method_receiver.is_none()
-                    && let Some(receiver) = node.receiver()
-                {
-                    self.visit(&receiver);
-                }
-
-                self.index_method_reference(message.clone(), &node.message_loc().unwrap(), method_receiver);
-
-                match message.as_str() {
-                    ">" | "<" | ">=" | "<=" => {
-                        self.index_method_reference("<=>".to_string(), &node.message_loc().unwrap(), method_receiver);
+                    if method_receiver.is_none()
+                        && let Some(receiver) = node.receiver()
+                    {
+                        self.visit(&receiver);
                     }
-                    _ => {}
+
+                    self.index_method_reference(message.to_string(), &node.message_loc().unwrap(), method_receiver);
+
+                    match message.as_ref() {
+                        ">" | "<" | ">=" | "<=" => {
+                            self.index_method_reference(
+                                "<=>".to_string(),
+                                &node.message_loc().unwrap(),
+                                method_receiver,
+                            );
+                        }
+                        _ => {}
+                    }
+                } else if let Some(receiver) = node.receiver() {
+                    self.visit(&receiver);
                 }
             }
         }
     }
 
     fn visit_call_and_write_node(&mut self, node: &ruby_prism::CallAndWriteNode) {
-        let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
+        if self.options.collect_method_references {
+            let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
 
-        if method_receiver.is_none()
-            && let Some(receiver) = node.receiver()
-        {
+            if method_receiver.is_none()
+                && let Some(receiver) = node.receiver()
+            {
+                self.visit(&receiver);
+            }
+
+            let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
+            self.index_method_reference(read_name, &node.operator_loc(), method_receiver);
+
+            let write_name = String::from_utf8_lossy(node.write_name().as_slice()).to_string();
+            self.index_method_reference(write_name, &node.operator_loc(), method_receiver);
+        } else if let Some(receiver) = node.receiver() {
             self.visit(&receiver);
         }
-
-        let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
-        self.index_method_reference(read_name, &node.operator_loc(), method_receiver);
-
-        let write_name = String::from_utf8_lossy(node.write_name().as_slice()).to_string();
-        self.index_method_reference(write_name, &node.operator_loc(), method_receiver);
 
         self.visit(&node.value());
     }
 
     fn visit_call_operator_write_node(&mut self, node: &ruby_prism::CallOperatorWriteNode) {
-        let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
+        if self.options.collect_method_references {
+            let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
 
-        if method_receiver.is_none()
-            && let Some(receiver) = node.receiver()
-        {
+            if method_receiver.is_none()
+                && let Some(receiver) = node.receiver()
+            {
+                self.visit(&receiver);
+            }
+
+            let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
+            self.index_method_reference(read_name, &node.call_operator_loc().unwrap(), method_receiver);
+
+            let write_name = String::from_utf8_lossy(node.write_name().as_slice()).to_string();
+            self.index_method_reference(write_name, &node.call_operator_loc().unwrap(), method_receiver);
+        } else if let Some(receiver) = node.receiver() {
             self.visit(&receiver);
         }
-
-        let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
-        self.index_method_reference(read_name, &node.call_operator_loc().unwrap(), method_receiver);
-
-        let write_name = String::from_utf8_lossy(node.write_name().as_slice()).to_string();
-        self.index_method_reference(write_name, &node.call_operator_loc().unwrap(), method_receiver);
 
         self.visit(&node.value());
     }
 
     fn visit_call_or_write_node(&mut self, node: &ruby_prism::CallOrWriteNode) {
-        let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
+        if self.options.collect_method_references {
+            let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
 
-        if method_receiver.is_none()
-            && let Some(receiver) = node.receiver()
-        {
+            if method_receiver.is_none()
+                && let Some(receiver) = node.receiver()
+            {
+                self.visit(&receiver);
+            }
+
+            let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
+            self.index_method_reference(read_name, &node.operator_loc(), method_receiver);
+
+            let write_name = String::from_utf8_lossy(node.write_name().as_slice()).to_string();
+            self.index_method_reference(write_name, &node.operator_loc(), method_receiver);
+        } else if let Some(receiver) = node.receiver() {
             self.visit(&receiver);
         }
-
-        let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
-        self.index_method_reference(read_name, &node.operator_loc(), method_receiver);
-
-        let write_name = String::from_utf8_lossy(node.write_name().as_slice()).to_string();
-        self.index_method_reference(write_name, &node.operator_loc(), method_receiver);
 
         self.visit(&node.value());
     }
@@ -2380,11 +2432,12 @@ impl Visit<'_> for RubyIndexer<'_> {
         let expression = node.expression();
         if let Some(expression) = expression {
             match expression {
-                ruby_prism::Node::SymbolNode { .. } => {
+                ruby_prism::Node::SymbolNode { .. } if self.options.collect_method_references => {
                     let symbol = expression.as_symbol_node().unwrap();
                     let name = Self::location_to_string(&symbol.value_loc().unwrap());
                     self.index_method_reference(name, &node.location(), None);
                 }
+                ruby_prism::Node::SymbolNode { .. } => {}
                 _ => {
                     self.visit(&expression);
                 }
@@ -2407,12 +2460,13 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         new_name.push_str("()");
         old_name.push_str("()");
+        let old_name_for_reference = self.options.collect_method_references.then(|| old_name.clone());
 
         let offset = Offset::from_prism_location(&node.location());
         let (comments, flags) = self.find_comments_for(offset.start());
         let definition = Definition::MethodAlias(Box::new(MethodAliasDefinition::new(
             self.local_graph.intern_string(new_name),
-            self.local_graph.intern_string(old_name.clone()),
+            self.local_graph.intern_string(old_name),
             self.uri_id,
             offset,
             comments,
@@ -2424,7 +2478,9 @@ impl Visit<'_> for RubyIndexer<'_> {
         let definition_id = self.local_graph.add_definition(definition);
 
         self.add_member_to_current_owner(definition_id);
-        self.index_method_reference(old_name, &node.old_name().location(), None);
+        if let Some(old_name) = old_name_for_reference {
+            self.index_method_reference(old_name, &node.old_name().location(), None);
+        }
     }
 
     fn visit_alias_global_variable_node(&mut self, node: &ruby_prism::AliasGlobalVariableNode<'_>) {
@@ -2450,25 +2506,35 @@ impl Visit<'_> for RubyIndexer<'_> {
 
     fn visit_and_node(&mut self, node: &ruby_prism::AndNode) {
         let left = node.left();
-        let method_receiver = self.method_receiver(Some(&left), left.location());
+        if self.options.collect_method_references {
+            let method_receiver = self.method_receiver(Some(&left), left.location());
 
-        if method_receiver.is_none() {
+            if method_receiver.is_none() {
+                self.visit(&left);
+            }
+
+            self.index_method_reference("&&".to_string(), &node.location(), method_receiver);
+        } else {
             self.visit(&left);
         }
 
-        self.index_method_reference("&&".to_string(), &node.location(), method_receiver);
         self.visit(&node.right());
     }
 
     fn visit_or_node(&mut self, node: &ruby_prism::OrNode) {
         let left = node.left();
-        let method_receiver = self.method_receiver(Some(&left), left.location());
+        if self.options.collect_method_references {
+            let method_receiver = self.method_receiver(Some(&left), left.location());
 
-        if method_receiver.is_none() {
+            if method_receiver.is_none() {
+                self.visit(&left);
+            }
+
+            self.index_method_reference("||".to_string(), &node.location(), method_receiver);
+        } else {
             self.visit(&left);
         }
 
-        self.index_method_reference("||".to_string(), &node.location(), method_receiver);
         self.visit(&node.right());
     }
 }

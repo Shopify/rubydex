@@ -139,6 +139,14 @@ In the example above, there are 2 constant references to the class declaration `
 the constant name being referred to is the same in both cases. Constant references are unique based on their URI +
 offsets combination (i.e.: where they appeared in the code), names are unique based on their lexical scope structure.
 
+Consumers that need written constant bindings but not method-call references can use
+`indexing::build_local_graph_with_options` with `IndexingOptions { collect_method_references: false }`. The existing
+`build_local_graph` entry point and both Ruby backend constructors still collect method references by default. The option
+skips method-call references and their call-only synthetic receiver references before they enter a local graph. It keeps
+written constant references, definitions, lexical scopes, parser diagnostics, and method definitions with receivers.
+RBS indexing is unchanged because it does not produce method-call references. A namespace inferred solely from an omitted
+call can lose that promotion; consumers should compare written constant targets rather than inferred namespace kinds.
+
 ### Names
 
 Names are unique constant name structures that connect all of the pieces required to resolve them against the graph

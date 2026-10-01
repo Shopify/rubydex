@@ -6,6 +6,7 @@
 use std::collections::hash_map::Entry;
 
 use crate::diagnostic::{Diagnostic, Rule};
+use crate::indexing::IndexingOptions;
 use crate::model::comment::Comment;
 use crate::model::definitions::{DefinitionFlags, Parameter, ParameterStruct, Signatures};
 use crate::model::document::Document;
@@ -72,6 +73,7 @@ impl VisibilityModifier {
 pub struct RubyOperationBuilder<'a> {
     uri_id: UriId,
     source: &'a str,
+    options: IndexingOptions,
     // Interning
     strings: IdentityHashMap<StringId, StringRef>,
     names: IdentityHashMap<NameId, NameRef>,
@@ -93,6 +95,7 @@ impl<'a> RubyOperationBuilder<'a> {
         Self {
             uri_id,
             source,
+            options: IndexingOptions::default(),
             strings: IdentityHashMap::default(),
             names: IdentityHashMap::default(),
             document: Document::new(uri, source),
@@ -102,6 +105,12 @@ impl<'a> RubyOperationBuilder<'a> {
             pending_decorator_offset: None,
             operations: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_options(mut self, options: IndexingOptions) -> Self {
+        self.options = options;
+        self
     }
 
     #[must_use]
@@ -387,6 +396,12 @@ impl<'a> RubyOperationBuilder<'a> {
     }
 
     fn index_method_reference_for_call(&mut self, node: &ruby_prism::CallNode) {
+        if !self.options.collect_method_references {
+            if let Some(receiver) = node.receiver() {
+                self.visit(&receiver);
+            }
+            return;
+        }
         let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
 
         if method_receiver.is_none()
@@ -1730,14 +1745,18 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 }
                 ruby_prism::Node::CallTargetNode { .. } => {
                     let call_target_node = left.as_call_target_node().unwrap();
-                    let method_receiver = self.method_receiver(Some(&call_target_node.receiver()), left.location());
+                    if self.options.collect_method_references {
+                        let method_receiver = self.method_receiver(Some(&call_target_node.receiver()), left.location());
 
-                    if method_receiver.is_none() {
+                        if method_receiver.is_none() {
+                            self.visit(&call_target_node.receiver());
+                        }
+
+                        let name = String::from_utf8_lossy(call_target_node.name().as_slice()).to_string();
+                        self.index_method_reference(name, &call_target_node.location(), method_receiver);
+                    } else {
                         self.visit(&call_target_node.receiver());
                     }
-
-                    let name = String::from_utf8_lossy(call_target_node.name().as_slice()).to_string();
-                    self.index_method_reference(name, &call_target_node.location(), method_receiver);
                 }
                 _ => {}
             }
@@ -1788,9 +1807,9 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
             return;
         }
 
-        let message = String::from_utf8_lossy(node.name().as_slice()).to_string();
+        let message = String::from_utf8_lossy(node.name().as_slice());
 
-        match message.as_str() {
+        match message.as_ref() {
             "attr_accessor" => {
                 index_attr(AttrKind::Accessor, node, self);
             }
@@ -1849,18 +1868,32 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                         recv @ (ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }),
                     ) => {
                         let name_id = self.index_constant_reference(recv, true);
-                        (name_id.map(Target::Constant), name_id)
+                        let method_receiver = if self.options.collect_method_references {
+                            name_id
+                        } else {
+                            None
+                        };
+                        (name_id.map(Target::Constant), method_receiver)
                     }
-                    _ => (None, self.method_receiver(recv_ref, node.location())),
+                    _ => {
+                        let method_receiver = if self.options.collect_method_references {
+                            self.method_receiver(recv_ref, node.location())
+                        } else {
+                            None
+                        };
+                        (None, method_receiver)
+                    }
                 };
 
-                let ref_str_id = self.intern_string(format!("{old_name}()"));
-                self.operations.push(Operation::ReferenceMethod(op::ReferenceMethod {
-                    str_id: ref_str_id,
-                    uri_id: self.uri_id,
-                    offset: old_offset.clone(),
-                    receiver: method_receiver.map(Target::Constant),
-                }));
+                if self.options.collect_method_references {
+                    let ref_str_id = self.intern_string(format!("{old_name}()"));
+                    self.operations.push(Operation::ReferenceMethod(op::ReferenceMethod {
+                        str_id: ref_str_id,
+                        uri_id: self.uri_id,
+                        offset: old_offset.clone(),
+                        receiver: method_receiver.map(Target::Constant),
+                    }));
+                }
 
                 let offset = Offset::from_prism_location(&node.location());
                 let (comments, flags) = self.find_comments_for(offset.start());
@@ -1911,7 +1944,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                     return;
                 }
 
-                let visibility = Visibility::from_string(message.as_str());
+                let visibility = Visibility::from_string(message.as_ref());
                 let offset = Offset::from_prism_location(&node.location());
 
                 if let Some(arguments) = node.arguments() {
@@ -1990,6 +2023,18 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 self.handle_singleton_method_visibility(node, Visibility::Public, "public_class_method");
             }
             _ => {
+                if !self.options.collect_method_references {
+                    if let Some(arguments) = node.arguments() {
+                        self.visit_arguments_node(&arguments);
+                    }
+                    if let Some(block) = node.block() {
+                        self.visit(&block);
+                    }
+                    if let Some(receiver) = node.receiver() {
+                        self.visit(&receiver);
+                    }
+                    return;
+                }
                 if let Some(arguments) = node.arguments() {
                     self.visit_arguments_node(&arguments);
                 }
@@ -2005,9 +2050,9 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                     self.visit(&receiver);
                 }
 
-                self.index_method_reference(message.clone(), &node.message_loc().unwrap(), method_receiver);
+                self.index_method_reference(message.to_string(), &node.message_loc().unwrap(), method_receiver);
 
-                match message.as_str() {
+                match message.as_ref() {
                     ">" | "<" | ">=" | "<=" => {
                         self.index_method_reference("<=>".to_string(), &node.message_loc().unwrap(), method_receiver);
                     }
@@ -2018,6 +2063,13 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
     }
 
     fn visit_call_and_write_node(&mut self, node: &ruby_prism::CallAndWriteNode) {
+        if !self.options.collect_method_references {
+            if let Some(receiver) = node.receiver() {
+                self.visit(&receiver);
+            }
+            self.visit(&node.value());
+            return;
+        }
         let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
         if method_receiver.is_none()
             && let Some(receiver) = node.receiver()
@@ -2035,6 +2087,13 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
     }
 
     fn visit_call_operator_write_node(&mut self, node: &ruby_prism::CallOperatorWriteNode) {
+        if !self.options.collect_method_references {
+            if let Some(receiver) = node.receiver() {
+                self.visit(&receiver);
+            }
+            self.visit(&node.value());
+            return;
+        }
         let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
         if method_receiver.is_none()
             && let Some(receiver) = node.receiver()
@@ -2052,6 +2111,13 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
     }
 
     fn visit_call_or_write_node(&mut self, node: &ruby_prism::CallOrWriteNode) {
+        if !self.options.collect_method_references {
+            if let Some(receiver) = node.receiver() {
+                self.visit(&receiver);
+            }
+            self.visit(&node.value());
+            return;
+        }
         let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
         if method_receiver.is_none()
             && let Some(receiver) = node.receiver()
@@ -2133,9 +2199,11 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
         if let Some(expression) = expression {
             match expression {
                 ruby_prism::Node::SymbolNode { .. } => {
-                    let symbol = expression.as_symbol_node().unwrap();
-                    let name = Self::location_to_string(&symbol.value_loc().unwrap());
-                    self.index_method_reference(name, &node.location(), None);
+                    if self.options.collect_method_references {
+                        let symbol = expression.as_symbol_node().unwrap();
+                        let name = Self::location_to_string(&symbol.value_loc().unwrap());
+                        self.index_method_reference(name, &node.location(), None);
+                    }
                 }
                 _ => {
                     self.visit(&expression);
@@ -2163,7 +2231,8 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
         let offset = Offset::from_prism_location(&node.location());
         let (comments, flags) = self.find_comments_for(offset.start());
         let new_name_str_id = self.intern_string(new_name);
-        let old_name_str_id = self.intern_string(old_name.clone());
+        let old_name_for_reference = self.options.collect_method_references.then(|| old_name.clone());
+        let old_name_str_id = self.intern_string(old_name);
 
         self.operations.push(Operation::AliasMethod(op::AliasMethod {
             new_name_str_id,
@@ -2175,7 +2244,9 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
             receiver: None,
         }));
 
-        self.index_method_reference(old_name, &node.old_name().location(), None);
+        if let Some(old_name) = old_name_for_reference {
+            self.index_method_reference(old_name, &node.old_name().location(), None);
+        }
     }
 
     fn visit_alias_global_variable_node(&mut self, node: &ruby_prism::AliasGlobalVariableNode<'_>) {
@@ -2198,6 +2269,11 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
     }
 
     fn visit_and_node(&mut self, node: &ruby_prism::AndNode) {
+        if !self.options.collect_method_references {
+            self.visit(&node.left());
+            self.visit(&node.right());
+            return;
+        }
         let left = node.left();
         let method_receiver = self.method_receiver(Some(&left), left.location());
 
@@ -2210,6 +2286,11 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
     }
 
     fn visit_or_node(&mut self, node: &ruby_prism::OrNode) {
+        if !self.options.collect_method_references {
+            self.visit(&node.left());
+            self.visit(&node.right());
+            return;
+        }
         let left = node.left();
         let method_receiver = self.method_receiver(Some(&left), left.location());
 
