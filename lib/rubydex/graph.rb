@@ -54,8 +54,12 @@ module Rubydex
       specs = Bundler.locked_gems&.specs
       return unless specs
 
+      source_indexes = {} #: Hash[String, untyped]
+
       specs.each do |lazy_spec|
-        spec = Gem::Specification.find_by_name(lazy_spec.name)
+        spec = resolve_dependency_spec(lazy_spec, source_indexes)
+        next unless spec
+
         spec.require_paths.each do |path|
           # For native extensions, RubyGems inserts an absolute require path pointing to
           # `gems/some-gem-1.0.0/extensions`. Those paths don't actually include any Ruby files inside, so we can skip
@@ -64,9 +68,37 @@ module Rubydex
 
           paths << File.join(spec.full_gem_path, path)
         end
-      rescue Gem::MissingSpecError
-        nil
       end
+    end
+
+    # Finds the installed gem behind a locked specification.
+    #
+    # `Gem::Specification.find_by_name` only knows about gems RubyGems installed, so it raises for a gem the Gemfile
+    # takes from a `git` or `path` source. Those are not rare: a workspace can take its whole framework from a branch.
+    # Bundler keeps an index per source that knows both where it put the checkout and which directories the gemspec
+    # declares, so ask the source directly before giving up.
+    #
+    # The index is built once per source. A multi-gem repository such as rails shares one source across every gem it
+    # provides, and building that index means reading gemspecs off disk.
+    #
+    #: (untyped lazy_spec, Hash[String, untyped] source_indexes) -> untyped
+    def resolve_dependency_spec(lazy_spec, source_indexes)
+      Gem::Specification.find_by_name(lazy_spec.name)
+    rescue Gem::MissingSpecError
+      source = lazy_spec.source
+      return unless source.respond_to?(:specs)
+
+      index = source_indexes.fetch(source.to_s) do
+        source_indexes[source.to_s] = begin
+          source.specs
+        rescue StandardError
+          # A source that is not checked out yet, or is otherwise unusable, leaves its gems unindexed rather than
+          # failing the whole workspace.
+          nil
+        end
+      end
+
+      index&.search(lazy_spec.name)&.last
     end
 
     # Searches for the latest installation of the `rbs` gem and adds the paths for the core and stdlib RBS definitions
