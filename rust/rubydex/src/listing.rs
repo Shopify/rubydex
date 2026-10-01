@@ -211,7 +211,7 @@ mod tests {
 
         let (files, errors) = collect_document_paths(&context, &["foo", "bar"]);
 
-        assert!(errors.is_empty());
+        assert_eq!(errors.as_slice(), []);
 
         assert_eq!(
             files,
@@ -236,7 +236,7 @@ mod tests {
 
         let (files, errors) = collect_document_paths(&context, &["bar"]);
 
-        assert!(errors.is_empty());
+        assert_eq!(errors.as_slice(), []);
 
         assert_eq!(
             files,
@@ -260,7 +260,7 @@ mod tests {
 
         let (files, errors) = collect_document_paths(&context, &["lib", "sig", "config.ru"]);
 
-        assert!(errors.is_empty());
+        assert_eq!(errors.as_slice(), []);
 
         assert_eq!(
             [
@@ -287,7 +287,7 @@ mod tests {
             &HashSet::new(),
         );
 
-        assert!(files.is_empty());
+        assert_eq!(files, [] as [std::path::PathBuf; 0]);
 
         assert_eq!(
             errors,
@@ -315,8 +315,8 @@ mod tests {
 
         let (files, errors) = collect_file_paths(vec![relative_root.to_string_lossy().into_owned()], &HashSet::new());
 
-        assert!(errors.is_empty());
-        assert!(!files.is_empty());
+        assert_eq!(errors.as_slice(), []);
+        assert_ne!(files, [] as [std::path::PathBuf; 0]);
         assert!(
             files.iter().all(|path| path.is_absolute()),
             "expected only absolute paths, got {files:?}"
@@ -336,7 +336,7 @@ mod tests {
 
         let (files, errors) = collect_document_paths_with_exclusions(&context, &["included", "excluded"], &excluded);
 
-        assert!(errors.is_empty());
+        assert_eq!(errors.as_slice(), []);
         assert_eq!(files, [included.to_str().unwrap().to_string()]);
     }
 
@@ -353,7 +353,7 @@ mod tests {
 
         let (files, errors) = collect_document_paths_with_exclusions(&context, &["root"], &excluded);
 
-        assert!(errors.is_empty());
+        assert_eq!(errors.as_slice(), []);
         assert_eq!(files, [kept.to_str().unwrap().to_string()]);
     }
 
@@ -374,7 +374,7 @@ mod tests {
 
         let (files, errors) = collect_document_paths(&context, &["project"]);
 
-        assert!(errors.is_empty());
+        assert_eq!(errors.as_slice(), []);
         // The symlink is indexed at its own path, not resolved to the target.
         let alias = PathBuf::from("project").join("alias.rb");
         assert_eq!(files, [alias.to_str().unwrap().to_string()]);
@@ -398,7 +398,7 @@ mod tests {
 
         let (files, errors) = collect_document_paths(&context, &["project"]);
 
-        assert!(errors.is_empty());
+        assert_eq!(errors.as_slice(), []);
         // The symlinked directory is not followed, so `outside/bar.rb` is never reached.
         assert_eq!(files, [kept.to_str().unwrap().to_string()]);
     }
@@ -415,7 +415,7 @@ mod tests {
 
         let (files, errors) = collect_document_paths(&context, &["link"]);
 
-        assert!(errors.is_empty());
+        assert_eq!(errors.as_slice(), []);
         // The requested root is traversed; files are indexed under the requested (symlink) path.
         let foo = PathBuf::from("link").join("foo.rb");
         assert_eq!(files, [foo.to_str().unwrap().to_string()]);
@@ -458,7 +458,7 @@ mod tests {
 
         let (files, errors) = collect_document_paths_with_exclusions(&context, &["lib"], &excluded);
 
-        assert!(errors.is_empty());
+        assert_eq!(errors.as_slice(), []);
         assert_eq!(files, [kept.to_str().unwrap().to_string()]);
     }
 }

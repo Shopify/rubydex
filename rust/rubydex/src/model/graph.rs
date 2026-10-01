@@ -1759,7 +1759,7 @@ mod tests {
         assert_eq!(context.graph().constant_references.len(), 4);
         {
             let declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-            assert!(declaration.as_namespace().unwrap().references().is_empty());
+            assert_eq!(declaration.as_namespace().unwrap().references(), []);
         }
     }
 

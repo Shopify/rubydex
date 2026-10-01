@@ -900,7 +900,7 @@ mod class_and_module_tests {
             assert_def_name_eq!(&context, def, "Baz");
             assert_def_name_offset_eq!(&context, def, "3:11-3:14");
             assert!(def.superclass_ref().is_none());
-            assert!(def.members().is_empty());
+            assert_eq!(def.members(), []);
 
             assert_definition_at!(&context, "2:3-4:6", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -948,7 +948,7 @@ mod class_and_module_tests {
             assert_def_name_eq!(&context, def, "Quuux");
             assert_def_name_offset_eq!(&context, def, "3:13-3:18");
             assert!(def.superclass_ref().is_none());
-            assert!(def.members().is_empty());
+            assert_eq!(def.members(), []);
 
             assert_definition_at!(&context, "2:3-4:6", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
