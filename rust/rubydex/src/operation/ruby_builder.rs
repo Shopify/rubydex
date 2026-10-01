@@ -1863,26 +1863,24 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 let new_name_str_id = self.intern_string(format!("{new_name}()"));
                 let old_name_str_id = self.intern_string(format!("{old_name}()"));
 
-                let (receiver, method_receiver) = match recv_ref {
-                    Some(
-                        recv @ (ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }),
-                    ) => {
-                        let name_id = self.index_constant_reference(recv, true);
-                        let method_receiver = if self.options.collect_method_references {
-                            name_id
-                        } else {
-                            None
-                        };
-                        (name_id.map(Target::Constant), method_receiver)
-                    }
-                    _ => {
-                        let method_receiver = if self.options.collect_method_references {
-                            self.method_receiver(recv_ref, node.location())
-                        } else {
-                            None
-                        };
-                        (None, method_receiver)
-                    }
+                let (receiver, method_receiver) = if let Some(
+                    recv @ (ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }),
+                ) = recv_ref
+                {
+                    let name_id = self.index_constant_reference(recv, true);
+                    let method_receiver = if self.options.collect_method_references {
+                        name_id
+                    } else {
+                        None
+                    };
+                    (name_id.map(Target::Constant), method_receiver)
+                } else {
+                    let method_receiver = if self.options.collect_method_references {
+                        self.method_receiver(recv_ref, node.location())
+                    } else {
+                        None
+                    };
+                    (None, method_receiver)
                 };
 
                 if self.options.collect_method_references {

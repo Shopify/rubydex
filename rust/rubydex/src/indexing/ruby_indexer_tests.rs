@@ -5519,7 +5519,7 @@ A < A
             source
                 .match_indices('A')
                 .skip(1)
-                .map(|(start, _)| start as u32)
+                .map(|(start, _)| u32::try_from(start).unwrap())
                 .collect::<Vec<_>>()
         );
         assert!(
@@ -5668,15 +5668,20 @@ MADE.work
             assert!(
                 answers.contains(&(
                     UriId::from(URI),
-                    start as u32,
-                    (start + word.len()) as u32,
+                    u32::try_from(start).unwrap(),
+                    u32::try_from(start + word.len()).unwrap(),
                     target.map(DeclarationId::from)
                 )),
                 "{needle}"
             );
         }
         let compact = source.rfind("def self.read; Target; end").unwrap() + "def self.read; ".len();
-        assert!(answers.contains(&(UriId::from(URI), compact as u32, (compact + 6) as u32, None)));
+        assert!(answers.contains(&(
+            UriId::from(URI),
+            u32::try_from(compact).unwrap(),
+            u32::try_from(compact + 6).unwrap(),
+            None
+        )));
     }
 
     #[test]
