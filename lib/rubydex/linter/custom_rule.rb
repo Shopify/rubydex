@@ -28,6 +28,11 @@ module Rubydex
         raise NotImplementedError, "Subclasses must implement the lint method"
       end
 
+      #: () -> Hash[String, untyped]
+      def options
+        @config.options_for(self.class)
+      end
+
       # Anchors a diagnostic on a definition's name token, falling back to its full range when no name location exists.
       #: (Definition) -> Location
       def diagnostic_location(definition)

@@ -2,9 +2,18 @@
 
 require "test_helper"
 require "helpers/context"
+require "rubydex/linter"
 
 class ConfigTest < Minitest::Test
   include Test::Helpers::WithContext
+
+  class ConfigurableRule < Rubydex::Linter::CustomRule
+    class << self
+      def default_severity = Rubydex::Severity::Warning
+    end
+
+    def lint; end
+  end
 
   def test_load_returns_an_empty_configuration_for_a_workspace_without_a_config_file
     with_context do |context|
@@ -89,6 +98,24 @@ class ConfigTest < Minitest::Test
       refute_predicate(rules.fetch("Other"), :enabled?)
       assert_empty(rules.fetch("Other").exclude_patterns)
       assert_nil(rules.fetch("Other").severity)
+    end
+  end
+
+  def test_linter_preserves_custom_rule_option_types
+    with_context do |context|
+      context.write!("rubydex.toml", <<~TOML)
+        [linter.rules.ConfigurableRule]
+        enabled = true
+        parent_class = "ApplicationRecord"
+        count = 1
+      TOML
+
+      config = Rubydex::Config.load(context.absolute_path)
+      options = config.linter.rules.fetch("ConfigurableRule").options
+
+      assert_same(options, config.linter.options_for(ConfigurableRule))
+      assert_equal("ApplicationRecord", options.fetch("parent_class"))
+      assert_equal(1, options.fetch("count"))
     end
   end
 
