@@ -21,6 +21,83 @@ mod constant_resolution_tests {
     use super::*;
 
     #[test]
+    fn singleton_reference_to_non_namespace_is_not_retried_forever() {
+        let mut context = graph_test();
+        context.index_uri("file:///gateway.rb", {
+            r#"
+            module Gateway
+              API_VERSION = "9.5"
+              API_VERSION_ALIAS = API_VERSION
+
+              def self.header
+                "application/PTI#{API_VERSION.delete('.')}"
+              end
+
+              def self.alias_header
+                API_VERSION_ALIAS.delete('.')
+              end
+            end
+            "#
+        });
+
+        context.resolve();
+        assert_declaration_kind_eq!(context, "Gateway::API_VERSION_ALIAS", "ConstantAlias");
+        for _ in 0..5 {
+            context.resolve();
+        }
+
+        let mut graph = context.into_graph();
+        assert!(
+            graph.take_pending_work().is_empty(),
+            "singleton references to resolved non-namespace constants should not remain pending"
+        );
+    }
+
+    #[test]
+    fn singleton_reference_with_unknown_receiver_remains_pending() {
+        let mut context = graph_test();
+        context.index_uri("file:///gateway.rb", "module Gateway; MISSING.delete('.'); end");
+        context.resolve();
+
+        assert!(
+            context.pending_work_len() > 0,
+            "references with unresolved receivers must remain available for incremental resolution"
+        );
+    }
+
+    #[test]
+    fn singleton_reference_is_retried_when_non_namespace_receiver_becomes_a_class() {
+        let mut context = graph_test();
+        context.index_uri("file:///gateway.rb", "module Gateway; API_VERSION = '9.5'; end");
+        context.index_uri("file:///call.rb", "module Gateway; API_VERSION.delete('.'); end");
+        context.resolve();
+
+        assert!(
+            context.pending_work_len() == 0,
+            "the known non-namespace receiver should not be retried"
+        );
+        context.index_uri("file:///gateway.rb", "module Gateway; class API_VERSION; end; end");
+        assert!(
+            context.pending_work_len() > 0,
+            "the declaration change should enqueue dependent work"
+        );
+        context.resolve();
+
+        assert_declaration_kind_eq!(context, "Gateway::API_VERSION", "Class");
+        assert_singleton_class_eq!(context, "Gateway::API_VERSION", "Gateway::API_VERSION::<API_VERSION>");
+        let graph = context.into_graph();
+        assert!(
+            graph.constant_references().values().all(|reference| {
+                graph
+                    .names()
+                    .get(reference.name_id())
+                    .is_some_and(|name| matches!(name, NameRef::Resolved(_)))
+            }),
+            "references should resolve after the receiver becomes a class"
+        );
+    }
+
+    #[test]
     fn resolving_top_level_references() {
         let mut context = graph_test();
         context.index_uri("file:///bar.rb", {

@@ -22,6 +22,9 @@ enum Outcome {
     /// We had everything we needed to resolve this constant (all relevant ancestor chains are complete), but the member
     /// isn't there. This is definitive: the unit can be dropped and a diagnostic emitted.
     Unresolved,
+    /// The attached object is known, but cannot have a singleton class. This result is terminal for a constant
+    /// reference in the current graph; its name dependency will enqueue it again if the declaration changes.
+    Unresolvable,
     /// We couldn't resolve this constant right now because a dependency was missing, so it may succeed later. The unit
     /// must be placed back in the queue and retried once we have progressed further. `partial` is `true` when the
     /// blocker was a still-partial ancestor chain (the member may appear once the chain completes); `false` when it was
@@ -172,7 +175,7 @@ impl<'a> Resolver<'a> {
     pub fn resolve_constant(&mut self, name_id: NameId) -> Option<DeclarationId> {
         match self.resolve_constant_internal(name_id) {
             Outcome::Resolved(id) => Some(id),
-            Outcome::Unresolved | Outcome::Retry { .. } => None,
+            Outcome::Unresolved | Outcome::Unresolvable | Outcome::Retry { .. } => None,
         }
     }
 
@@ -242,7 +245,7 @@ impl<'a> Resolver<'a> {
             Outcome::Retry { .. } => {
                 self.unit_queue.push_back(unit_id);
             }
-            Outcome::Unresolved => {
+            Outcome::Unresolved | Outcome::Unresolvable => {
                 // We couldn't resolve this name. Emit a diagnostic
             }
             Outcome::Resolved(id) => {
@@ -296,6 +299,10 @@ impl<'a> Resolver<'a> {
                 // If we had everything we needed to resolve this constant and still failed, then remember it as work
                 // for the next incremental resolution pass, but avoid trying again in this cycle
                 self.graph.push_work(unit_id);
+            }
+            Outcome::Unresolvable => {
+                // The receiver is resolved to a non-namespace declaration. Keep the dependency edge so a later
+                // declaration change can enqueue this reference again, but don't retry it on every resolution pass.
             }
         }
     }
@@ -1355,7 +1362,7 @@ impl<'a> Resolver<'a> {
                 Outcome::Resolved(id) => self.resolve_to_primary_namespace(id),
                 // The parent scope is genuinely unknown — not a circular alias or pending
                 // linearization, but a name that doesn't exist anywhere in the graph.
-                Outcome::Unresolved => Outcome::Unresolved,
+                Outcome::Unresolved | Outcome::Unresolvable => Outcome::Unresolved,
                 Outcome::Retry {
                     partial_ancestors: false,
                 } if !preserve_retry => Outcome::Unresolved,
@@ -1514,7 +1521,7 @@ impl<'a> Resolver<'a> {
                         .iter()
                         .find(|id| matches!(self.graph.declarations().get(id), Some(Declaration::Namespace(_))))
                     else {
-                        return Outcome::Unresolved;
+                        return Outcome::Unresolvable;
                     };
 
                     target_decl_id = namespace_id;
@@ -1525,7 +1532,7 @@ impl<'a> Resolver<'a> {
                 let Some(singleton_id) =
                     self.get_or_create_singleton_class(target_decl_id, SingletonAncestors::Enqueue)
                 else {
-                    return Outcome::Unresolved;
+                    return Outcome::Unresolvable;
                 };
                 self.graph.record_resolved_name(name_id, singleton_id);
                 // `get_or_create_singleton_class` already enqueued the singleton's ancestors on
@@ -1578,7 +1585,7 @@ impl<'a> Resolver<'a> {
                                 } => {
                                     missing_partial = true;
                                 }
-                                Outcome::Unresolved => {}
+                                Outcome::Unresolved | Outcome::Unresolvable => {}
                                 Outcome::Retry {
                                     partial_ancestors: false,
                                 } => {
@@ -1734,7 +1741,7 @@ impl<'a> Resolver<'a> {
                     // Object's ancestor chain is still partial, so we need to retry later.
                     Outcome::Retry { .. } => return object_outcome,
                     // Object's chain is complete, so we indeed can't resolve this constant.
-                    Outcome::Unresolved => {}
+                    Outcome::Unresolved | Outcome::Unresolvable => {}
                 }
             }
 
