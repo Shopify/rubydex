@@ -101,7 +101,7 @@ impl Job for FileDiscoveryJob {
 
 fn is_indexable_file(path: &Path) -> bool {
     path.extension()
-        .is_some_and(|ext| ext == "rb" || ext == "rake" || ext == "rbs" || ext == "ru")
+        .is_some_and(|ext| ext == "rb" || ext == "rake" || ext == "rbs" || ext == "ru" || ext == "erb")
 }
 
 fn is_excluded(excluded_patterns: &[Pattern], path: &Path) -> bool {
@@ -251,19 +251,28 @@ mod tests {
         let rake_file = PathBuf::from("lib").join("task.rake");
         let rbs_file = PathBuf::from("sig").join("foo.rbs");
         let rack_file = PathBuf::from("config.ru");
+        let html_erb_file = PathBuf::from("app").join("show.html.erb");
+        let javascript_erb_file = PathBuf::from("app").join("update.js.erb");
+        let generic_erb_file = PathBuf::from("app").join("template.erb");
         let txt_file = PathBuf::from("lib").join("notes.txt");
         context.touch(&ruby_file);
         context.touch(&rake_file);
         context.touch(&rbs_file);
         context.touch(&rack_file);
+        context.touch(&html_erb_file);
+        context.touch(&javascript_erb_file);
+        context.touch(&generic_erb_file);
         context.touch(&txt_file);
 
-        let (files, errors) = collect_document_paths(&context, &["lib", "sig", "config.ru"]);
+        let (files, errors) = collect_document_paths(&context, &["app", "lib", "sig", "config.ru"]);
 
         assert_eq!(errors.as_slice(), []);
 
         assert_eq!(
             [
+                html_erb_file.to_str().unwrap().to_string(),
+                generic_erb_file.to_str().unwrap().to_string(),
+                javascript_erb_file.to_str().unwrap().to_string(),
                 rack_file.to_str().unwrap().to_string(),
                 ruby_file.to_str().unwrap().to_string(),
                 rake_file.to_str().unwrap().to_string(),

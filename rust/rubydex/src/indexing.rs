@@ -1,6 +1,6 @@
 use crate::{
     errors::Errors,
-    indexing::{local_graph::LocalGraph, rbs_indexer::RBSIndexer, ruby_indexer::RubyIndexer},
+    indexing::{erb_indexer::ERBIndexer, local_graph::LocalGraph, rbs_indexer::RBSIndexer, ruby_indexer::RubyIndexer},
     job_queue::{Job, JobQueue},
     model::graph::Graph,
     operation::ruby_builder::RubyOperationBuilder,
@@ -9,6 +9,7 @@ use crossbeam_channel::{Sender, unbounded};
 use std::{ffi::OsStr, fs, path::PathBuf, sync::Arc};
 use url::Url;
 
+pub mod erb_indexer;
 pub mod local_graph;
 pub mod rbs_indexer;
 pub mod ruby_indexer;
@@ -22,15 +23,44 @@ pub enum IndexerBackend {
     OperationBuilder,
 }
 
+/// The source context in which Prism diagnostics should be interpreted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RubySourceContext {
+    File,
+    ERBTemplate,
+}
+
+impl RubySourceContext {
+    /// ERB templates are partial scripts, so top-level `yield`, `break`, `next` and `redo` are valid there. Prism's
+    /// `partial_script` option skips exactly these checks, but the published `ruby-prism` crate doesn't expose parse
+    /// options yet, so we filter the resulting errors instead.
+    // TODO: Replace this with `ruby_prism::Options::default().partial_script(self == Self::ERBTemplate)` once a
+    // `ruby-prism` release includes parse options.
+    pub(crate) fn should_report_parse_error(self, message: &str) -> bool {
+        self != Self::ERBTemplate
+            || !matches!(
+                message,
+                "Invalid yield" | "Invalid break" | "Invalid next" | "Invalid redo"
+            )
+    }
+}
+
 /// The language of a source document, used to dispatch to the appropriate indexer
 pub enum LanguageId {
     Ruby,
+    ERB,
     Rbs,
 }
 
 impl From<&OsStr> for LanguageId {
     fn from(ext: &OsStr) -> Self {
-        if ext == "rbs" { Self::Rbs } else { Self::Ruby }
+        if ext == "rbs" {
+            Self::Rbs
+        } else if ext == "erb" {
+            Self::ERB
+        } else {
+            Self::Ruby
+        }
     }
 }
 
@@ -43,6 +73,7 @@ impl LanguageId {
     pub fn from_language_id(language_id: &str) -> Result<Self, Errors> {
         match language_id {
             "ruby" => Ok(Self::Ruby),
+            "erb" => Ok(Self::ERB),
             "rbs" => Ok(Self::Rbs),
             _ => Err(Errors::FileError(format!("Unsupported language_id `{language_id}`"))),
         }
@@ -155,22 +186,39 @@ pub fn index_files(graph: &mut Graph, paths: Vec<PathBuf>, backend: IndexerBacke
 #[must_use]
 pub fn build_local_graph(uri: Box<str>, source: &str, language: &LanguageId, backend: IndexerBackend) -> LocalGraph {
     match language {
-        LanguageId::Ruby => match backend {
-            IndexerBackend::RubyIndexer => {
-                let mut indexer = RubyIndexer::new(uri, source);
-                indexer.index();
-                indexer.local_graph()
-            }
-            IndexerBackend::OperationBuilder => {
-                let builder = RubyOperationBuilder::new(uri, source);
-                let result = builder.build();
-                crate::operation::applier::apply_operations(result)
-            }
-        },
+        LanguageId::Ruby => build_ruby_local_graph(uri, source, source, backend, RubySourceContext::File),
+        LanguageId::ERB => ERBIndexer::new(uri, source, backend).index(),
         LanguageId::Rbs => {
             let mut indexer = RBSIndexer::new(uri, source);
             indexer.index();
             indexer.local_graph()
+        }
+    }
+}
+
+pub(super) fn build_ruby_local_graph(
+    uri: Box<str>,
+    ruby_source: &str,
+    document_source: &str,
+    backend: IndexerBackend,
+    source_context: RubySourceContext,
+) -> LocalGraph {
+    match backend {
+        IndexerBackend::RubyIndexer => {
+            let mut indexer =
+                RubyIndexer::new_with_document_source_and_context(uri, ruby_source, document_source, source_context);
+            indexer.index();
+            indexer.local_graph()
+        }
+        IndexerBackend::OperationBuilder => {
+            let builder = RubyOperationBuilder::new_with_document_source_and_context(
+                uri,
+                ruby_source,
+                document_source,
+                source_context,
+            );
+            let result = builder.build();
+            crate::operation::applier::apply_operations(result)
         }
     }
 }
@@ -180,6 +228,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::diagnostic::Rule;
     use crate::test_utils::Context;
     use std::path::Path;
 
@@ -211,6 +260,166 @@ mod tests {
     fn from_language_id_unknown() {
         let result = LanguageId::from_language_id("python");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn recognizes_erb_language_ids_and_extensions() {
+        assert!(matches!(LanguageId::from(OsStr::new("erb")), LanguageId::ERB));
+        assert!(matches!(LanguageId::from_language_id("erb"), Ok(LanguageId::ERB)));
+    }
+
+    #[test]
+    fn indexes_embedded_ruby_with_both_backends() {
+        let source = "<main>\n  <% class Greeting %>\n    <%= MESSAGE %>\n  <% end %>\n</main>\n";
+
+        for backend in [IndexerBackend::RubyIndexer, IndexerBackend::OperationBuilder] {
+            let graph = build_local_graph("file:///view.txt.erb".into(), source, &LanguageId::ERB, backend);
+
+            assert_eq!(graph.definitions().len(), 1, "backend: {backend:?}");
+            assert_eq!(
+                graph.definitions().values().next().unwrap().offset().start(),
+                u32::try_from(source.find("class Greeting").unwrap()).unwrap(),
+                "backend: {backend:?}"
+            );
+            assert_eq!(
+                graph.document().content_hash(),
+                xxhash_rust::xxh3::xxh3_64(source.as_bytes())
+            );
+            assert!(graph.document().diagnostics().is_empty(), "backend: {backend:?}");
+        }
+    }
+
+    #[test]
+    fn erb_document_hash_includes_non_ruby_content() {
+        let first = "<p>first</p><% class Greeting; end %>";
+        let second = "<p>other</p><% class Greeting; end %>";
+
+        let first_graph = build_local_graph(
+            "file:///view.erb".into(),
+            first,
+            &LanguageId::ERB,
+            IndexerBackend::RubyIndexer,
+        );
+        let second_graph = build_local_graph(
+            "file:///view.erb".into(),
+            second,
+            &LanguageId::ERB,
+            IndexerBackend::RubyIndexer,
+        );
+
+        assert_ne!(
+            first_graph.document().content_hash(),
+            second_graph.document().content_hash()
+        );
+    }
+
+    #[test]
+    fn erb_extraction_failure_becomes_a_diagnostic() {
+        let source = "before\0<%= Foo %>";
+        let graph = build_local_graph(
+            "file:///view.erb".into(),
+            source,
+            &LanguageId::ERB,
+            IndexerBackend::RubyIndexer,
+        );
+
+        assert_eq!(graph.document().diagnostics().len(), 1);
+        assert!(
+            graph.document().diagnostics()[0]
+                .message()
+                .starts_with("Failed to extract embedded Ruby:")
+        );
+        assert_eq!(
+            graph.document().content_hash(),
+            xxhash_rust::xxh3::xxh3_64(source.as_bytes())
+        );
+    }
+
+    #[test]
+    fn erb_allows_top_level_yield_with_both_backends() {
+        let source = "<head><%= yield :head %></head><body class=\"<%= yield(:body_class) %>\"><%= yield %></body>";
+
+        for backend in [IndexerBackend::RubyIndexer, IndexerBackend::OperationBuilder] {
+            let graph = build_local_graph("file:///layout.html.erb".into(), source, &LanguageId::ERB, backend);
+
+            assert!(
+                graph
+                    .diagnostics()
+                    .iter()
+                    .all(|diagnostic| diagnostic.message() != "Invalid yield"),
+                "backend: {backend:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn erb_allows_top_level_block_exits_with_both_backends() {
+        for source in ["<% break %>", "<% next %>", "<% redo %>", "<% next if foo %>"] {
+            for backend in [IndexerBackend::RubyIndexer, IndexerBackend::OperationBuilder] {
+                let graph = build_local_graph("file:///partial.html.erb".into(), source, &LanguageId::ERB, backend);
+
+                assert!(
+                    graph.diagnostics().is_empty(),
+                    "source: {source:?}, backend: {backend:?}, diagnostics: {:?}",
+                    graph.diagnostics()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ruby_retains_top_level_block_exit_parse_errors_with_both_backends() {
+        for (source, message) in [
+            ("break", "Invalid break"),
+            ("next", "Invalid next"),
+            ("redo", "Invalid redo"),
+        ] {
+            for backend in [IndexerBackend::RubyIndexer, IndexerBackend::OperationBuilder] {
+                let graph = build_local_graph("file:///script.rb".into(), source, &LanguageId::Ruby, backend);
+
+                assert!(
+                    graph
+                        .diagnostics()
+                        .iter()
+                        .any(|diagnostic| diagnostic.rule() == &Rule::ParseError && diagnostic.message() == message),
+                    "source: {source:?}, backend: {backend:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ruby_retains_top_level_yield_parse_error_with_both_backends() {
+        let source = "yield";
+
+        for backend in [IndexerBackend::RubyIndexer, IndexerBackend::OperationBuilder] {
+            let graph = build_local_graph("file:///script.rb".into(), source, &LanguageId::Ruby, backend);
+
+            assert!(
+                graph
+                    .diagnostics()
+                    .iter()
+                    .any(|diagnostic| diagnostic.rule() == &Rule::ParseError && diagnostic.message() == "Invalid yield"),
+                "backend: {backend:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn erb_retains_genuine_ruby_parse_errors_with_both_backends() {
+        let source = "<%= foo( %>";
+
+        for backend in [IndexerBackend::RubyIndexer, IndexerBackend::OperationBuilder] {
+            let graph = build_local_graph("file:///broken.erb".into(), source, &LanguageId::ERB, backend);
+
+            assert!(
+                graph
+                    .diagnostics()
+                    .iter()
+                    .any(|diagnostic| diagnostic.rule() == &Rule::ParseError),
+                "backend: {backend:?}"
+            );
+        }
     }
 
     #[test]
