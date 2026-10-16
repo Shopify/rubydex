@@ -1331,32 +1331,38 @@ impl Graph {
         let dependents: Vec<NameDependent> = self.name_dependents.get(&name_id).cloned().unwrap_or_default();
         self.queue_structural_cascade(name_id, queue);
 
-        if let Some(old_decl_id) = self.unresolve_name(name_id) {
-            for dep in &dependents {
-                match dep {
-                    NameDependent::Reference(ref_id) => {
-                        if let Some(decl) = self.declarations.get_mut(&old_decl_id) {
-                            decl.remove_constant_reference(ref_id);
-                        }
-                        self.push_work(Unit::ConstantRef(*ref_id));
+        let old_decl_id = self.unresolve_name(name_id);
+        for dep in &dependents {
+            match dep {
+                NameDependent::Reference(ref_id) => {
+                    if let Some(old_decl_id) = old_decl_id
+                        && let Some(decl) = self.declarations.get_mut(&old_decl_id)
+                    {
+                        decl.remove_constant_reference(ref_id);
                     }
-                    NameDependent::Definition(def_id) => {
-                        self.push_work(Unit::Definition(*def_id));
-
-                        if let Some(decl) = self.declarations.get_mut(&old_decl_id) {
-                            decl.remove_definition(def_id);
-                        }
-
-                        if self
-                            .declarations
-                            .get(&old_decl_id)
-                            .is_some_and(Declaration::has_no_definitions)
-                        {
-                            queue.push(InvalidationItem::Declaration(old_decl_id));
-                        }
-                    }
-                    NameDependent::ChildName(_) | NameDependent::NestedName(_) => {}
+                    // A previously unresolved reference may have been retired because its receiver was
+                    // known to be a non-namespace. Re-evaluate it when any part of its name is invalidated.
+                    self.push_work(Unit::ConstantRef(*ref_id));
                 }
+                NameDependent::Definition(def_id) => {
+                    let Some(old_decl_id) = old_decl_id else {
+                        continue;
+                    };
+                    self.push_work(Unit::Definition(*def_id));
+
+                    if let Some(decl) = self.declarations.get_mut(&old_decl_id) {
+                        decl.remove_definition(def_id);
+                    }
+
+                    if self
+                        .declarations
+                        .get(&old_decl_id)
+                        .is_some_and(Declaration::has_no_definitions)
+                    {
+                        queue.push(InvalidationItem::Declaration(old_decl_id));
+                    }
+                }
+                NameDependent::ChildName(_) | NameDependent::NestedName(_) => {}
             }
         }
     }

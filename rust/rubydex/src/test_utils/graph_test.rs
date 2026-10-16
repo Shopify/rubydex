@@ -63,6 +63,14 @@ impl GraphTest {
         resolver.resolve();
     }
 
+    #[must_use]
+    pub fn pending_work_len(&mut self) -> usize {
+        let work = self.graph.take_pending_work();
+        let len = work.len();
+        self.graph.extend_work(work);
+        len
+    }
+
     // Name dependents helpers (shared with LocalGraphTest for assert_dependents! macro)
 
     /// # Panics
