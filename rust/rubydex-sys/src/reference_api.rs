@@ -6,6 +6,7 @@ use std::ptr;
 use crate::declaration_api::CDeclaration;
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
+use crate::utils::OwnedString;
 use libc::c_char;
 use rubydex::model::graph::Graph;
 use rubydex::model::ids::{ConstantReferenceId, MethodReferenceId};
@@ -148,8 +149,8 @@ pub unsafe extern "C" fn rdx_constant_reference_name(pointer: GraphPointer, refe
     })
 }
 
-/// Returns the UTF-8 name string for a method reference id, or NULL if the reference cannot be found.
-/// Caller must free with `free_c_string`.
+/// Returns the UTF-8 name string for a method reference id, or a null string if the reference cannot be found.
+/// Caller must free with `free_owned_string`.
 ///
 /// # Safety
 ///
@@ -159,18 +160,14 @@ pub unsafe extern "C" fn rdx_constant_reference_name(pointer: GraphPointer, refe
 ///
 /// This function will panic if the reference's name cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_method_reference_name(pointer: GraphPointer, reference_id: u64) -> *const c_char {
+pub unsafe extern "C" fn rdx_method_reference_name(pointer: GraphPointer, reference_id: u64) -> OwnedString {
     with_graph(pointer, |graph| {
         let ref_id = MethodReferenceId::new(reference_id);
         let Some(reference) = graph.method_references().get(&ref_id) else {
-            return ptr::null();
+            return OwnedString::null();
         };
-        let name = graph
-            .strings()
-            .get(reference.str())
-            .expect("Name ID should exist")
-            .to_string();
-        CString::new(name).unwrap().into_raw().cast_const()
+        let name = graph.strings().get(reference.str()).expect("Name ID should exist");
+        OwnedString::new(name.as_str())
     })
 }
 

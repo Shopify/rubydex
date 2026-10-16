@@ -2,6 +2,7 @@
 #define RUBYDEX_UTILS_H
 
 #include "ruby.h"
+#include "rustbindings.h"
 
 // Convert a Ruby array of strings into a double char pointer so that we can pass that to Rust.
 // This copies the data so it must be freed with rdxi_free_str_array
@@ -16,6 +17,10 @@ void rdxi_check_array_of_strings(VALUE array);
 // Convert a Rust-owned C string to a Ruby string and release it with free_c_string.
 // Returns nil when the Rust side returned NULL.
 VALUE rdxi_owned_c_string_to_ruby(const char *string);
+
+// Convert a Rust-owned string with an explicit length to a Ruby string and release it with free_owned_string. Unlike
+// a C string, it may contain NUL bytes. Returns nil when the Rust side returned a null string.
+VALUE rdxi_owned_string_to_ruby(OwnedString string);
 
 // Coerce an optional String, Symbol, or nil to a C string, returning `default_value` when the value
 // is nil. A non-nil value must be a String or Symbol, otherwise a `TypeError` is raised. The

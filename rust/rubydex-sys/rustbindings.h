@@ -326,6 +326,16 @@ typedef struct CQueryResult {
 } CQueryResult;
 
 /**
+ * C-compatible owned UTF-8 string with an explicit length. Unlike a C string, it is not NUL-terminated and may
+ * contain NUL bytes, which source code can put into names, comments and diagnostic messages. A null `data` means
+ * there is no string
+ */
+typedef struct OwnedString {
+    const char *data;
+    size_t length;
+} OwnedString;
+
+/**
  * `Node` cell payload: which handle family to build, the kind value, and the entity id.
  */
 typedef struct CNode {
@@ -376,9 +386,9 @@ typedef union CCellPayload {
      */
     int64_t int_val;
     /**
-     * `Str`: owned C string (freed by `rdx_rows_iter_free`).
+     * `Str`: owned string (freed by `rdx_rows_iter_free`).
      */
-    const char *str_val;
+    struct OwnedString str_val;
     /**
      * `Node`.
      */
@@ -435,7 +445,7 @@ typedef struct Location {
  * C-compatible struct representing a single comment with its string and location
  */
 typedef struct CommentEntry {
-    const char *string;
+    struct OwnedString string;
     struct Location *location;
 } CommentEntry;
 
@@ -475,7 +485,7 @@ typedef struct CRule {
  */
 typedef struct DiagnosticEntry {
     struct CRule rule;
-    const char *message;
+    struct OwnedString message;
     struct Location *location;
 } DiagnosticEntry;
 
@@ -803,18 +813,15 @@ bool rdx_graph_declarations_iter_next(struct DeclarationsIter *iter, struct CDec
 void rdx_graph_declarations_iter_free(struct DeclarationsIter *iter);
 
 /**
- * Returns the UTF-8 name string for a declaration id.
- * Caller must free with `free_c_string`.
+ * Returns the UTF-8 name string for a declaration id, or a null string if the declaration cannot be found.
+ * Caller must free with `free_owned_string`.
  *
  * # Safety
  *
  * Assumes pointer is valid.
- *
- * # Panics
- *
- * This function will panic if the name pointer is invalid.
  */
-const char *rdx_declaration_name(GraphPointer pointer, uint64_t name_id);
+struct OwnedString rdx_declaration_name(GraphPointer pointer,
+                                        uint64_t name_id);
 
 /**
  * Returns the declaration ID for a member from a declaration.
@@ -847,18 +854,15 @@ const struct CDeclaration *rdx_declaration_find_member(GraphPointer pointer,
                                                        bool only_inherited);
 
 /**
- * Returns the UTF-8 unqualified name string for a declaration id.
- * Caller must free with `free_c_string`.
+ * Returns the UTF-8 unqualified name string for a declaration id, or a null string if the declaration cannot be
+ * found. Caller must free with `free_owned_string`.
  *
  * # Safety
  *
  * Assumes pointer is valid.
- *
- * # Panics
- *
- * This function will panic if the name pointer is invalid.
  */
-const char *rdx_declaration_unqualified_name(GraphPointer pointer, uint64_t name_id);
+struct OwnedString rdx_declaration_unqualified_name(GraphPointer pointer,
+                                                    uint64_t name_id);
 
 /**
  * An iterator over definition IDs and kinds for a given declaration
@@ -1002,18 +1006,15 @@ struct MethodReferencesIter *rdx_declaration_method_references_iter_new(GraphPoi
 enum DefinitionKind rdx_definition_kind(GraphPointer pointer, uint64_t definition_id);
 
 /**
- * Returns the UTF-8 unqualified name string for a definition id.
- * Caller must free with `free_c_string`.
+ * Returns the UTF-8 unqualified name string for a definition id, or a null string if the definition cannot be found.
+ * Caller must free with `free_owned_string`.
  *
  * # Safety
  *
  * Assumes pointer is valid.
- *
- * # Panics
- *
- * This function will panic if the definition cannot be found.
  */
-const char *rdx_definition_name(GraphPointer pointer, uint64_t definition_id);
+struct OwnedString rdx_definition_name(GraphPointer pointer,
+                                       uint64_t definition_id);
 
 /**
  * Returns the UTF-8 raw name string for a class, module, constant, or constant-alias definition id.
@@ -1776,8 +1777,8 @@ const char *rdx_constant_reference_name(GraphPointer pointer,
                                         uint64_t reference_id);
 
 /**
- * Returns the UTF-8 name string for a method reference id, or NULL if the reference cannot be found.
- * Caller must free with `free_c_string`.
+ * Returns the UTF-8 name string for a method reference id, or a null string if the reference cannot be found.
+ * Caller must free with `free_owned_string`.
  *
  * # Safety
  *
@@ -1787,8 +1788,8 @@ const char *rdx_constant_reference_name(GraphPointer pointer,
  *
  * This function will panic if the reference's name cannot be found.
  */
-const char *rdx_method_reference_name(GraphPointer pointer,
-                                      uint64_t reference_id);
+struct OwnedString rdx_method_reference_name(GraphPointer pointer,
+                                             uint64_t reference_id);
 
 /**
  * Returns a newly allocated `Location` for the given constant reference id, or NULL if the reference cannot be found.
@@ -1927,6 +1928,15 @@ void rdx_definition_signatures_free(struct SignatureArray *ptr);
  * Frees a `CString` allocated on the Rust side
  */
 void free_c_string(const char *ptr);
+
+/**
+ * Frees an `OwnedString` allocated on the Rust side
+ *
+ * # Safety
+ *
+ * - `string` must have been returned by a rubydex function and must not be used after being freed
+ */
+void free_owned_string(struct OwnedString string);
 
 /**
  * Frees a boxed u64 allocated on the Rust side
