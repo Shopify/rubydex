@@ -108,6 +108,14 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_names_with_nul_byte
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo; attr_reader :\"a\0b\"; end\n", "ruby")
+    graph.resolve
+
+    assert_equal([["Foo#a\0b()", "a\0b()"]], graph["Foo"].members.map { |m| [m.name, m.unqualified_name] })
+  end
+
   def test_singleton_class
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)

@@ -188,7 +188,9 @@ static VALUE cypher_cell_to_value(VALUE graph_obj, const struct CCell *cell) {
     case CCellTag_Int:
         return LL2NUM(cell->payload.int_val);
     case CCellTag_Str:
-        return cell->payload.str_val == NULL ? Qnil : rb_utf8_str_new_cstr(cell->payload.str_val);
+        return cell->payload.str_val.data == NULL
+                   ? Qnil
+                   : rb_utf8_str_new(cell->payload.str_val.data, (long)cell->payload.str_val.length);
     case CCellTag_List: {
         VALUE array = rb_ary_new_capa((long)cell->payload.list.len);
         for (size_t i = 0; i < cell->payload.list.len; i++) {

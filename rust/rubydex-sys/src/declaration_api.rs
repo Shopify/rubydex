@@ -2,13 +2,13 @@
 
 use libc::c_char;
 use rubydex::model::declaration::{Ancestor, Declaration, Namespace};
-use std::ffi::CString;
 use std::ptr;
 
 use crate::definition_api::{DefinitionsIter, rdx_definitions_iter_new_from_ids};
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::reference_api::{CConstantReference, CMethodReference, ConstantReferencesIter, MethodReferencesIter};
 use crate::utils;
+use crate::utils::OwnedString;
 use rubydex::model::ids::{DeclarationId, StringId, declaration_id_from_lookup_name};
 
 #[repr(C)]
@@ -119,24 +119,20 @@ pub unsafe extern "C" fn rdx_graph_declarations_iter_free(iter: *mut Declaration
     unsafe { DeclarationsIter::free(iter) }
 }
 
-/// Returns the UTF-8 name string for a declaration id.
-/// Caller must free with `free_c_string`.
+/// Returns the UTF-8 name string for a declaration id, or a null string if the declaration cannot be found.
+/// Caller must free with `free_owned_string`.
 ///
 /// # Safety
 ///
 /// Assumes pointer is valid.
-///
-/// # Panics
-///
-/// This function will panic if the name pointer is invalid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_declaration_name(pointer: GraphPointer, name_id: u64) -> *const c_char {
+pub unsafe extern "C" fn rdx_declaration_name(pointer: GraphPointer, name_id: u64) -> OwnedString {
     with_graph(pointer, |graph| {
         let name_id = DeclarationId::new(name_id);
         if let Some(decl) = graph.declarations().get(&name_id) {
-            CString::new(decl.name()).unwrap().into_raw().cast_const()
+            OwnedString::new(decl.name())
         } else {
-            ptr::null()
+            OwnedString::null()
         }
     })
 }
@@ -213,24 +209,20 @@ pub unsafe extern "C" fn rdx_declaration_find_member(
     })
 }
 
-/// Returns the UTF-8 unqualified name string for a declaration id.
-/// Caller must free with `free_c_string`.
+/// Returns the UTF-8 unqualified name string for a declaration id, or a null string if the declaration cannot be
+/// found. Caller must free with `free_owned_string`.
 ///
 /// # Safety
 ///
 /// Assumes pointer is valid.
-///
-/// # Panics
-///
-/// This function will panic if the name pointer is invalid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_declaration_unqualified_name(pointer: GraphPointer, name_id: u64) -> *const c_char {
+pub unsafe extern "C" fn rdx_declaration_unqualified_name(pointer: GraphPointer, name_id: u64) -> OwnedString {
     with_graph(pointer, |graph| {
         let name_id = DeclarationId::new(name_id);
         if let Some(decl) = graph.declarations().get(&name_id) {
-            CString::new(decl.unqualified_name()).unwrap().into_raw().cast_const()
+            OwnedString::new(&decl.unqualified_name())
         } else {
-            ptr::null()
+            OwnedString::null()
         }
     })
 }

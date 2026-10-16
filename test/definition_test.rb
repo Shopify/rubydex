@@ -204,6 +204,22 @@ class DefinitionTest < Minitest::Test
     end
   end
 
+  def test_definition_comments_with_nul_byte
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "# before\0after\nclass Foo; end\n", "ruby")
+
+    comments = graph.documents.find { |d| d.uri == "file:///foo.rb" }.definitions.find { |d| d.name == "Foo" }.comments
+    assert_equal(["# before\0after"], comments.map(&:string))
+  end
+
+  def test_definition_name_with_nul_byte
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo; attr_reader :\"a\0b\"; end\n", "ruby")
+
+    definitions = graph.documents.find { |d| d.uri == "file:///foo.rb" }.definitions
+    assert_equal(["Foo", "a\0b()"], definitions.map(&:name))
+  end
+
   def test_definition_deprecated
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)

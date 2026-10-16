@@ -132,7 +132,7 @@ static VALUE rdxr_definition_comments(VALUE self) {
     for (size_t i = 0; i < arr->len; i++) {
         CommentEntry entry = arr->items[i];
 
-        VALUE string = rb_utf8_str_new_cstr(entry.string);
+        VALUE string = rb_utf8_str_new(entry.string.data, (long)entry.string.length);
 
         Location *loc = entry.location;
         VALUE location = rdxi_build_location_value(loc);
@@ -160,8 +160,7 @@ static VALUE rdxr_definition_name(VALUE self) {
     HandleData *data;
     void *graph = rdxi_graph_from_handle(self, &data);
 
-    const char *name = rdx_definition_name(graph, data->id);
-    return rdxi_owned_c_string_to_ruby(name);
+    return rdxi_owned_string_to_ruby(rdx_definition_name(graph, data->id));
 }
 
 /*

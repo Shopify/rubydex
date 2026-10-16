@@ -1,6 +1,7 @@
 use libc::{c_char, size_t};
 use std::ffi::{CStr, CString};
 use std::path::Path;
+use std::ptr;
 use std::slice;
 use std::str::Utf8Error;
 
@@ -40,6 +41,55 @@ pub extern "C" fn free_c_string(ptr: *const c_char) {
     unsafe {
         let _ = CString::from_raw(ptr.cast_mut());
     }
+}
+
+/// C-compatible owned UTF-8 string with an explicit length. Unlike a C string, it is not NUL-terminated and may
+/// contain NUL bytes, which source code can put into names, comments and diagnostic messages. A null `data` means
+/// there is no string
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct OwnedString {
+    pub data: *const c_char,
+    pub length: usize,
+}
+
+impl OwnedString {
+    #[must_use]
+    pub fn new(value: &str) -> Self {
+        let bytes: Box<[u8]> = value.as_bytes().into();
+        Self {
+            length: bytes.len(),
+            data: Box::into_raw(bytes).cast::<c_char>().cast_const(),
+        }
+    }
+
+    #[must_use]
+    pub fn null() -> Self {
+        Self {
+            data: ptr::null(),
+            length: 0,
+        }
+    }
+
+    /// # Safety
+    ///
+    /// - The string must have been created by `OwnedString::new` (or be null) and must not be used after being freed
+    pub unsafe fn free(self) {
+        if !self.data.is_null() {
+            let bytes = ptr::slice_from_raw_parts_mut(self.data.cast_mut().cast::<u8>(), self.length);
+            let _ = unsafe { Box::from_raw(bytes) };
+        }
+    }
+}
+
+/// Frees an `OwnedString` allocated on the Rust side
+///
+/// # Safety
+///
+/// - `string` must have been returned by a rubydex function and must not be used after being freed
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_owned_string(string: OwnedString) {
+    unsafe { string.free() }
 }
 
 /// Frees a boxed u64 allocated on the Rust side
