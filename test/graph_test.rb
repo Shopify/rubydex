@@ -401,6 +401,35 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_graph_resolve_constant_with_three_or_more_segments
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        module A
+          module B
+            module C
+              class D; end
+            end
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      [
+        ["A::B", [], "A::B"],
+        ["A::B::C", [], "A::B::C"],
+        ["A::B::C::D", [], "A::B::C::D"],
+        ["B::C", ["A"], "A::B::C"],
+        ["B::C::D", ["A"], "A::B::C::D"],
+        ["C::D", ["A", "B"], "A::B::C::D"],
+      ].each do |name, nesting, expected_name|
+        assert_equal(expected_name, graph.resolve_constant(name, nesting)&.name)
+      end
+    end
+  end
+
   def test_graph_resolve_constant_with_definition_context
     with_context do |context|
       context.write!("foo.rb", <<~RUBY)

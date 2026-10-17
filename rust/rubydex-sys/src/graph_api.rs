@@ -15,7 +15,7 @@ use rubydex::model::encoding::Encoding;
 use rubydex::model::graph::Graph;
 use rubydex::model::ids::{DeclarationId, DefinitionId, NameId, UriId, declaration_id_from_lookup_name};
 use rubydex::model::keywords;
-use rubydex::model::name::NameRef;
+use rubydex::model::name::{NameRef, ParentScope};
 use rubydex::model::visibility::Visibility;
 use rubydex::query::{CompletionCandidate, CompletionContext, CompletionReceiver};
 use rubydex::resolution::Resolver;
@@ -261,7 +261,25 @@ fn class_or_module_definition_name_id(
 
 fn resolve_constant_name(mut tracked_name: name_api::TrackedName<'_>) -> *const CDeclaration {
     let name_id = tracked_name.name_id();
-    let declaration_id = Resolver::new(tracked_name.graph_mut()).resolve_constant(name_id);
+    let mut parent_ids = Vec::new();
+    let mut current_id = name_id;
+    while let Some(name) = tracked_name.graph().names().get(&current_id) {
+        match name.parent_scope() {
+            ParentScope::Some(parent_id) | ParentScope::Attached(parent_id) => {
+                parent_ids.push(*parent_id);
+                current_id = *parent_id;
+            }
+            ParentScope::None | ParentScope::TopLevel => break,
+        }
+    }
+
+    let declaration_id = {
+        let mut resolver = Resolver::new(tracked_name.graph_mut());
+        for parent_id in parent_ids.into_iter().rev() {
+            resolver.resolve_constant(parent_id);
+        }
+        resolver.resolve_constant(name_id)
+    };
     declaration_id.map_or(ptr::null(), |id| {
         let declaration = tracked_name.graph().declarations().get(&id).unwrap();
         Box::into_raw(Box::new(CDeclaration::from_declaration(id, declaration))).cast_const()
