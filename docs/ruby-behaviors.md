@@ -1284,6 +1284,24 @@ Object.ancestors       # => [Object, Kernel, BasicObject]
 BasicObject.ancestors  # => [BasicObject]
 ```
 
+### Superclass lookup while defining a class
+
+Ruby evaluates a class's superclass expression before binding a new class constant. As a result, when a class name is
+also used as an unqualified superclass inside a lexical scope, that in-progress definition must not shadow an outer
+constant with the same name:
+
+```ruby
+class ApplicationRecord; end
+
+module GSD
+  class ApplicationRecord < ApplicationRecord; end
+end
+
+GSD::ApplicationRecord.superclass # => ::ApplicationRecord
+```
+
+A binding already present in that lexical scope remains visible when the class definition is evaluated.
+
 Singleton classes use a separate root rule: `BasicObject.singleton_class.superclass` is `Class`.
 
 ```rb
