@@ -786,6 +786,15 @@ class GraphTest < Minitest::Test
     assert_equal(2, graph.documents.count)
   end
 
+  def test_index_source_with_erb
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///template.js.erb", "const ignored = 1; <% class FromERB; end %>", "erb")
+    graph.resolve
+
+    assert_equal(2, graph.documents.count)
+    refute_nil(graph["FromERB"])
+  end
+
   def test_index_source_with_unknown_language_id
     graph = Rubydex::Graph.new
 
@@ -863,6 +872,7 @@ class GraphTest < Minitest::Test
       context.write!("top_level.rake", "class TopLevelRake; end")
       context.write!("top_level.rbs", "class TopLevelRbs; end")
       context.write!("config.ru", "class ConfigRu; end")
+      context.write!("top_level.html.erb", "<h1><%= TopLevelERB %></h1>")
 
       graph = graph_for(context)
       paths = graph.workspace_paths
@@ -876,6 +886,7 @@ class GraphTest < Minitest::Test
       assert_includes(paths, context.absolute_path_to("top_level.rake"))
       assert_includes(paths, context.absolute_path_to("top_level.rbs"))
       assert_includes(paths, context.absolute_path_to("config.ru"))
+      assert_includes(paths, context.absolute_path_to("top_level.html.erb"))
 
       # Includes gem dependency paths from Bundler
       gem_require_paths = Bundler.locked_gems.specs.flat_map do |lazy_spec|

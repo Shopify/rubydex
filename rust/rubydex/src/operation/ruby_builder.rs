@@ -6,6 +6,7 @@
 use std::collections::hash_map::Entry;
 
 use crate::diagnostic::{Diagnostic, Rule};
+use crate::indexing::RubySourceContext;
 use crate::model::comment::Comment;
 use crate::model::definitions::{DefinitionFlags, Parameter, ParameterStruct, Signatures};
 use crate::model::document::Document;
@@ -83,11 +84,27 @@ pub struct RubyOperationBuilder<'a> {
     pending_decorator_offset: Option<Offset>,
     // Output
     operations: Vec<Operation>,
+    source_context: RubySourceContext,
 }
 
 impl<'a> RubyOperationBuilder<'a> {
     #[must_use]
     pub fn new(uri: Box<str>, source: &'a str) -> Self {
+        Self::new_with_document_source(uri, source, source)
+    }
+
+    #[must_use]
+    pub fn new_with_document_source(uri: Box<str>, source: &'a str, document_source: &str) -> Self {
+        Self::new_with_document_source_and_context(uri, source, document_source, RubySourceContext::File)
+    }
+
+    #[must_use]
+    pub(crate) fn new_with_document_source_and_context(
+        uri: Box<str>,
+        source: &'a str,
+        document_source: &str,
+        source_context: RubySourceContext,
+    ) -> Self {
         let uri_id = UriId::from(&*uri);
 
         Self {
@@ -95,20 +112,26 @@ impl<'a> RubyOperationBuilder<'a> {
             source,
             strings: IdentityHashMap::default(),
             names: IdentityHashMap::default(),
-            document: Document::new(uri, source),
+            document: Document::new(uri, document_source),
             comments: Vec::new(),
             nesting_stack: Vec::new(),
             visibility_stack: vec![VisibilityModifier::new(Visibility::Private, false, Offset::new(0, 0))],
             pending_decorator_offset: None,
             operations: Vec::new(),
+            source_context,
         }
     }
 
     #[must_use]
     pub fn build(mut self) -> OperationBuilderResult {
+        // TODO: Parse with `partial_script` for ERB templates via `ruby_prism::parse_with_options` and drop the
+        // `should_report_parse_error` filter below once a `ruby-prism` release includes parse options.
         let result = ruby_prism::parse(self.source.as_bytes());
 
         for error in result.errors() {
+            if !self.source_context.should_report_parse_error(error.message()) {
+                continue;
+            }
             self.add_diagnostic(
                 Rule::ParseError,
                 Offset::from_prism_location(&error.location()),

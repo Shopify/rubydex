@@ -1,7 +1,7 @@
 //! Visit the Ruby AST and create the definitions.
 
 use crate::diagnostic::Rule;
-use crate::indexing::local_graph::LocalGraph;
+use crate::indexing::{RubySourceContext, local_graph::LocalGraph};
 use crate::model::comment::Comment;
 use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
@@ -89,13 +89,29 @@ pub struct RubyIndexer<'a> {
     nesting_stack: Vec<Nesting>,
     visibility_stack: Vec<VisibilityModifier>,
     pending_decorator_offset: Option<Offset>,
+    source_context: RubySourceContext,
 }
 
 impl<'a> RubyIndexer<'a> {
     #[must_use]
     pub fn new(uri: Box<str>, source: &'a str) -> Self {
+        Self::new_with_document_source(uri, source, source)
+    }
+
+    #[must_use]
+    pub fn new_with_document_source(uri: Box<str>, source: &'a str, document_source: &str) -> Self {
+        Self::new_with_document_source_and_context(uri, source, document_source, RubySourceContext::File)
+    }
+
+    #[must_use]
+    pub(crate) fn new_with_document_source_and_context(
+        uri: Box<str>,
+        source: &'a str,
+        document_source: &str,
+        source_context: RubySourceContext,
+    ) -> Self {
         let uri_id = UriId::from(&*uri);
-        let local_graph = LocalGraph::new(uri_id, Document::new(uri, source));
+        let local_graph = LocalGraph::new(uri_id, Document::new(uri, document_source));
 
         Self {
             uri_id,
@@ -105,6 +121,7 @@ impl<'a> RubyIndexer<'a> {
             nesting_stack: Vec::new(),
             visibility_stack: vec![VisibilityModifier::new(Visibility::Private, false, Offset::new(0, 0))],
             pending_decorator_offset: None,
+            source_context,
         }
     }
 
@@ -114,9 +131,14 @@ impl<'a> RubyIndexer<'a> {
     }
 
     pub fn index(&mut self) {
+        // TODO: Parse with `partial_script` for ERB templates via `ruby_prism::parse_with_options` and drop the
+        // `should_report_parse_error` filter below once a `ruby-prism` release includes parse options.
         let result = ruby_prism::parse(self.source.as_bytes());
 
         for error in result.errors() {
+            if !self.source_context.should_report_parse_error(error.message()) {
+                continue;
+            }
             self.local_graph.add_diagnostic(
                 Rule::ParseError,
                 Offset::from_prism_location(&error.location()),
