@@ -401,6 +401,38 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_graph_resolve_constant_with_constant_paths
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        module A
+          X = 1
+
+          module B
+            module C
+              class D; end
+            end
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal("A::X", graph.resolve_constant("X", ["A", "B"]).name)
+      assert_nil(graph.resolve_constant("X", ["A::B"]))
+
+      assert_equal("A::B", graph.resolve_constant("A::B", []).name)
+      assert_equal("A::B::C", graph.resolve_constant("A::B::C", []).name)
+      assert_equal("A::B::C::D", graph.resolve_constant("A::B::C::D", []).name)
+      assert_equal("A::B::C", graph.resolve_constant("B::C", ["A"]).name)
+      assert_equal("A::B::C::D", graph.resolve_constant("B::C::D", ["A"]).name)
+      assert_equal("A::B::C::D", graph.resolve_constant("C::D", ["A", "B"]).name)
+      assert_equal("A::B::C::D", graph.resolve_constant("C::D", ["A::B"]).name)
+      assert_equal("A::B::C::D", graph.resolve_constant("D", ["A::B::C"]).name)
+    end
+  end
+
   def test_graph_resolve_constant_with_definition_context
     with_context do |context|
       context.write!("foo.rb", <<~RUBY)
