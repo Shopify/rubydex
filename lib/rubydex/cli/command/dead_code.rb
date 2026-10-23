@@ -15,8 +15,6 @@ module Rubydex
           parse_options!
           abort_with_usage("unexpected argument: #{argv.first}") unless argv.empty?
 
-          require "rubydex/linter/helpers/path_helpers"
-
           $stderr.puts("Looking for potentially dead code...")
           graph = build_graph($stderr, workspace_path: current_workspace_path)
           candidates = graph.dead_code_candidates.sort_by(&:name)
@@ -25,7 +23,7 @@ module Rubydex
             puts(candidate.name)
             candidate.definitions.map(&:location).sort.each do |location|
               display = location.to_display
-              path = Rubydex::Linter::Helpers::PathHelpers.display_path(display, workspace: graph.workspace_path)
+              path = display_path(display, workspace: graph.workspace_path)
               puts("  #{path}:#{display.start_line},#{display.start_column}-#{display.end_line},#{display.end_column}")
             end
             puts

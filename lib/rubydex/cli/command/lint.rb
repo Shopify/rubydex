@@ -128,7 +128,7 @@ module Rubydex
         #: (Location location, workspace_path: String) -> String
         def format_linter_location(location, workspace_path:)
           display_location = location.to_display
-          path = Rubydex::Linter::Helpers::PathHelpers.display_path(display_location, workspace: workspace_path)
+          path = display_path(display_location, workspace: workspace_path)
 
           "#{path}:#{display_location.start_line}:#{display_location.start_column}"
         end
