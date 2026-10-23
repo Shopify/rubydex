@@ -827,6 +827,7 @@ impl<'a> RubyOperationBuilder<'a> {
         };
 
         let has_owner = self.current_owner_name_id().is_some();
+        let mixin_offset = Offset::from_prism_location(&node.location());
 
         let mixin_arguments = arguments
             .arguments()
@@ -875,6 +876,7 @@ impl<'a> RubyOperationBuilder<'a> {
             self.operations.push(Operation::Mixin(op::Mixin {
                 kind,
                 target: Target::Constant(name_id),
+                offset: mixin_offset.clone(),
             }));
         }
     }
