@@ -60,9 +60,7 @@ VALUE rdxi_declaration_class_for_kind(CDeclarationKind kind) {
 static VALUE rdxr_declaration_name(VALUE self) {
     HandleData *data;
     void *graph = rdxi_graph_from_handle(self, &data);
-    const char *name = rdx_declaration_name(graph, data->id);
-
-    return rdxi_owned_c_string_to_ruby(name);
+    return rdxi_owned_string_to_ruby(rdx_declaration_name(graph, data->id));
 }
 
 /*
@@ -74,9 +72,7 @@ static VALUE rdxr_declaration_name(VALUE self) {
 static VALUE rdxr_declaration_unqualified_name(VALUE self) {
     HandleData *data;
     void *graph = rdxi_graph_from_handle(self, &data);
-    const char *name = rdx_declaration_unqualified_name(graph, data->id);
-
-    return rdxi_owned_c_string_to_ruby(name);
+    return rdxi_owned_string_to_ruby(rdx_declaration_unqualified_name(graph, data->id));
 }
 
 // Body function for rb_ensure in Declaration#definitions

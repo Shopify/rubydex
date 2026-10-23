@@ -108,6 +108,14 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_diagnostic_message_with_nul_byte
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo; private :\"a\0b\"; end\n", "ruby")
+    graph.resolve
+
+    assert_equal(["undefined method `Foo#a\0b()` for visibility change"], graph.diagnostics.map(&:message))
+  end
+
   def test_passing_invalid_arguments_to_index_all
     graph = Rubydex::Graph.new
 
@@ -1743,6 +1751,15 @@ class GraphTest < Minitest::Test
       assert_instance_of(Rubydex::Query::Result, result)
       assert_equal([{ "p.name" => "Animal" }], result.rows)
     end
+  end
+
+  def test_run_returns_strings_with_nul_byte
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo; attr_reader :\"a\0b\"; end\n", "ruby")
+    graph.resolve
+
+    result = Rubydex::Query.parse("MATCH (m:Method) RETURN m.name").run(graph)
+    assert_equal([{ "m.name" => "Foo#a\0b()" }], result.rows)
   end
 
   def test_run_returns_declaration_handles_for_node_cells

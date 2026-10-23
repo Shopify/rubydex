@@ -59,6 +59,19 @@ VALUE rdxi_owned_c_string_to_ruby(const char *string) {
     return value;
 }
 
+// Convert a Rust-owned string with an explicit length to a Ruby string and release it with free_owned_string.
+// Returns nil when the Rust side returned a null string.
+VALUE rdxi_owned_string_to_ruby(OwnedString string) {
+    if (string.data == NULL) {
+        return Qnil;
+    }
+
+    VALUE value = rb_utf8_str_new(string.data, (long)string.length);
+    free_owned_string(string);
+
+    return value;
+}
+
 // Coerce an optional String, Symbol, or nil to a C string, defaulting to `default_value` for nil.
 const char *rdxi_symbol_or_string_cstr(VALUE value, const char *default_value) {
     if (NIL_P(value)) {
