@@ -396,6 +396,15 @@ impl<'a> RubyIndexer<'a> {
     }
 
     fn index_constant_reference(&mut self, node: &ruby_prism::Node, push_final_reference: bool) -> Option<NameId> {
+        self.index_constant_reference_in_nesting(node, push_final_reference, self.current_lexical_scope_name_id())
+    }
+
+    fn index_constant_reference_in_nesting(
+        &mut self,
+        node: &ruby_prism::Node,
+        push_final_reference: bool,
+        nesting: Option<NameId>,
+    ) -> Option<NameId> {
         let mut parent_scope_id = ParentScope::None;
 
         let location = match node {
@@ -484,9 +493,7 @@ impl<'a> RubyIndexer<'a> {
         let offset = Offset::from_prism_location(&location);
         let name = Self::location_to_string(&location);
         let string_id = self.local_graph.intern_string(name);
-        let name_id = self
-            .local_graph
-            .add_name(string_id, parent_scope_id, self.current_lexical_scope_name_id());
+        let name_id = self.local_graph.add_name(string_id, parent_scope_id, nesting);
 
         if push_final_reference {
             self.local_graph
@@ -494,6 +501,41 @@ impl<'a> RubyIndexer<'a> {
         }
 
         Some(name_id)
+    }
+
+    fn namesake_superclass_context(
+        &mut self,
+        name_node: Option<&ruby_prism::Node>,
+        superclass_node: Option<&ruby_prism::Node>,
+        class_offset: &Offset,
+    ) -> (Option<NameId>, Option<NameId>) {
+        let class_name_id = match (name_node, superclass_node) {
+            (
+                Some(name_node @ ruby_prism::Node::ConstantReadNode { .. }),
+                Some(superclass_node @ ruby_prism::Node::ConstantReadNode { .. }),
+            ) if Self::location_to_string(&name_node.location())
+                == Self::location_to_string(&superclass_node.location()) =>
+            {
+                self.index_constant_reference(name_node, false)
+            }
+            _ => None,
+        };
+        // A newly declared class is not visible while Ruby evaluates its superclass. Preserve a
+        // same-scope binding if this source has already defined the constant, though.
+        let has_prior_definition = class_name_id.is_some_and(|name_id| {
+            self.local_graph.definitions().values().any(|definition| {
+                definition.name_id() == Some(&name_id) && definition.offset().start() < class_offset.start()
+            })
+        });
+        let superclass_nesting = if class_name_id.is_some() && !has_prior_definition {
+            self.current_lexical_scope_name_id()
+                .and_then(|scope_id| self.local_graph.names().get(&scope_id))
+                .and_then(|scope| *scope.nesting())
+        } else {
+            self.current_lexical_scope_name_id()
+        };
+
+        (class_name_id, superclass_nesting)
     }
 
     fn index_method_reference(&mut self, name: String, location: &ruby_prism::Location, receiver: Option<NameId>) {
@@ -632,9 +674,11 @@ impl<'a> RubyIndexer<'a> {
         let offset = Offset::from_prism_location(location);
         let (comments, flags) = self.find_comments_for(offset.start());
         let lexical_nesting_id = self.parent_lexical_scope_id();
+        let (namesake_class_name_id, superclass_nesting) =
+            self.namesake_superclass_context(name_node, superclass_node.as_ref(), &offset);
         let superclass = superclass_node.as_ref().and_then(|n| {
             // Try direct constant reference first
-            if let Some(id) = self.index_constant_reference(n, false) {
+            if let Some(id) = self.index_constant_reference_in_nesting(n, false, superclass_nesting) {
                 return Some(self.local_graph.add_constant_reference(ConstantReference::new(
                     id,
                     self.uri_id,
@@ -678,7 +722,7 @@ impl<'a> RubyIndexer<'a> {
                 _ => name_node.location(),
             };
             (
-                self.index_constant_reference(name_node, false),
+                namesake_class_name_id.or_else(|| self.index_constant_reference(name_node, false)),
                 Offset::from_prism_location(&name_loc),
             )
         } else {

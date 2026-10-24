@@ -9,7 +9,7 @@ use crate::{
     assert_diagnostics_eq, assert_instance_variables_eq, assert_members_eq, assert_no_constant_alias_target,
     assert_no_diagnostics, assert_no_members, assert_owner_eq, assert_singleton_class_eq,
     diagnostic::{Rule, Severity},
-    model::{declaration::Ancestors, ids::DeclarationId, name::NameRef},
+    model::{declaration::Ancestors, definitions::Definition, ids::DeclarationId, name::NameRef},
     test_utils::GraphTest,
 };
 
@@ -980,6 +980,145 @@ mod constant_alias_tests {
 
 mod superclass_tests {
     use super::*;
+
+    fn resolved_superclass_name(context: &GraphTest, class_name: &str) -> String {
+        let graph = context.graph();
+        let declaration = graph.declarations().get(&DeclarationId::from(class_name)).unwrap();
+        let class = declaration
+            .definitions()
+            .iter()
+            .find_map(|id| match graph.definitions().get(id).unwrap() {
+                Definition::Class(class) if class.superclass_ref().is_some() => Some(class),
+                _ => None,
+            })
+            .unwrap();
+        let reference = graph
+            .constant_references()
+            .get(class.superclass_ref().unwrap())
+            .unwrap();
+        let NameRef::Resolved(superclass) = graph.names().get(reference.name_id()).unwrap() else {
+            panic!("superclass reference should resolve");
+        };
+
+        graph
+            .declarations()
+            .get(superclass.declaration_id())
+            .unwrap()
+            .name()
+            .to_string()
+    }
+
+    #[test]
+    fn resolves_namesake_superclass_from_outer_lexical_scope() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class ApplicationRecord; end
+
+            module GSD
+              class ApplicationRecord < ApplicationRecord; end
+              ApplicationRecord
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        let graph = context.graph();
+        assert_eq!(
+            resolved_superclass_name(&context, "GSD::ApplicationRecord"),
+            "ApplicationRecord"
+        );
+
+        let mut reference_targets: Vec<_> = graph
+            .constant_references()
+            .values()
+            .filter_map(|reference| {
+                let NameRef::Resolved(name) = graph.names().get(reference.name_id()).unwrap() else {
+                    return None;
+                };
+                (graph.strings().get(name.name().str()).unwrap().as_str() == "ApplicationRecord").then(|| {
+                    (
+                        reference.offset().start(),
+                        graph
+                            .declarations()
+                            .get(name.declaration_id())
+                            .unwrap()
+                            .name()
+                            .to_string(),
+                    )
+                })
+            })
+            .collect();
+        reference_targets.sort_by_key(|(offset, _)| *offset);
+        assert_eq!(
+            reference_targets
+                .into_iter()
+                .map(|(_, target)| target)
+                .collect::<Vec<_>>(),
+            ["ApplicationRecord", "GSD::ApplicationRecord"]
+        );
+    }
+
+    #[test]
+    fn resolves_namesake_superclass_from_enclosing_lexical_scope() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Outer
+              class ApplicationRecord; end
+
+              module GSD
+                class ApplicationRecord < ApplicationRecord; end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_eq!(
+            resolved_superclass_name(&context, "Outer::GSD::ApplicationRecord"),
+            "Outer::ApplicationRecord"
+        );
+    }
+
+    #[test]
+    fn resolves_namesake_superclass_to_existing_class_in_same_lexical_scope() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module GSD
+              class ApplicationRecord; end
+              class ApplicationRecord < ApplicationRecord; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_eq!(
+            resolved_superclass_name(&context, "GSD::ApplicationRecord"),
+            "GSD::ApplicationRecord"
+        );
+    }
+
+    #[test]
+    fn resolves_namesake_superclass_to_existing_module_in_same_lexical_scope() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module GSD
+              module ApplicationRecord; end
+              class ApplicationRecord < ApplicationRecord; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_eq!(
+            resolved_superclass_name(&context, "GSD::ApplicationRecord"),
+            "GSD::ApplicationRecord"
+        );
+    }
 
     #[test]
     fn linearizing_super_classes() {
