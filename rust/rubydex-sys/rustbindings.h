@@ -487,6 +487,31 @@ typedef struct DiagnosticArray {
     size_t len;
 } DiagnosticArray;
 
+/**
+ * C-compatible comment entry using a byte length so comment strings may contain NUL bytes.
+ */
+typedef struct DocumentCommentEntry {
+    const char *string;
+    size_t string_len;
+    struct Location *location;
+} DocumentCommentEntry;
+
+/**
+ * C-compatible array of comments in one group.
+ */
+typedef struct DocumentCommentArray {
+    struct DocumentCommentEntry *items;
+    size_t len;
+} DocumentCommentArray;
+
+/**
+ * C-compatible array of comment groups not attached to definitions in a document.
+ */
+typedef struct CommentGroupsArray {
+    struct DocumentCommentArray *items;
+    size_t len;
+} CommentGroupsArray;
+
 typedef struct CDefinitionConstantResolutionResult {
     CDefinitionConstantResolution status;
     const struct CDeclaration *declaration;
@@ -1247,6 +1272,28 @@ struct DiagnosticArray *rdx_graph_diagnostics(GraphPointer pointer);
  * - `ptr` must not be used after being freed.
  */
 void rdx_diagnostics_free(struct DiagnosticArray *ptr);
+
+/**
+ * Returns comment groups not attached to definitions in a Ruby document, or NULL if the document cannot be found.
+ * Each group contains comments in source order. Caller must free the result with
+ * `rdx_document_comments_free`.
+ *
+ * # Safety
+ * - `pointer` must be a valid `GraphPointer` previously returned by `rdx_graph_new`.
+ * - `uri_id` must be a valid URI id.
+ *
+ */
+struct CommentGroupsArray *rdx_document_comments(GraphPointer pointer,
+                                                 uint64_t uri_id);
+
+/**
+ * Frees a `CommentGroupsArray` previously returned by `rdx_document_comments`.
+ *
+ * # Safety
+ * - `ptr` must be a valid pointer returned by `rdx_document_comments`, or NULL.
+ * - `ptr` must not be used after being freed.
+ */
+void rdx_document_comments_free(struct CommentGroupsArray *ptr);
 
 /**
  * # Safety

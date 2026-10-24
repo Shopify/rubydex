@@ -2,6 +2,7 @@
 #include "definition.h"
 #include "graph.h"
 #include "handle.h"
+#include "location.h"
 #include "rustbindings.h"
 #include "utils.h"
 
@@ -24,6 +25,61 @@ static VALUE rdxr_document_uri(VALUE self) {
     const char *uri = rdx_document_uri(graph, data->id);
 
     return rdxi_owned_c_string_to_ruby(uri);
+}
+
+static VALUE document_comments_build(VALUE args) {
+    VALUE self = rb_ary_entry(args, 0);
+    struct CommentGroupsArray *groups =
+        (struct CommentGroupsArray *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+    (void)self;
+
+    VALUE result = rb_ary_new_capa((long)groups->len);
+    for (size_t group_index = 0; group_index < groups->len; group_index++) {
+        struct DocumentCommentArray group = groups->items[group_index];
+        VALUE comments = rb_ary_new_capa((long)group.len);
+
+        for (size_t comment_index = 0; comment_index < group.len; comment_index++) {
+            struct DocumentCommentEntry entry = group.items[comment_index];
+            VALUE string = rb_utf8_str_new(entry.string, (long)entry.string_len);
+            VALUE location = rdxi_build_location_value(entry.location);
+
+            VALUE comment_kwargs = rb_hash_new();
+            rb_hash_aset(comment_kwargs, ID2SYM(rb_intern("string")), string);
+            rb_hash_aset(comment_kwargs, ID2SYM(rb_intern("location")), location);
+            VALUE comment = rb_class_new_instance_kw(1, &comment_kwargs, cComment, RB_PASS_KEYWORDS);
+            rb_ary_push(comments, comment);
+        }
+
+        rb_ary_push(result, comments);
+    }
+
+    return result;
+}
+
+static VALUE document_comments_ensure(VALUE args) {
+    struct CommentGroupsArray *groups =
+        (struct CommentGroupsArray *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+    rdx_document_comments_free(groups);
+    return Qnil;
+}
+
+/*
+ * call-seq:
+ *   comments -> Array[Array[Rubydex::Comment]]
+ *
+ * Returns Ruby comment groups that are not associated with a definition in this document.
+ */
+static VALUE rdxr_document_comments(VALUE self) {
+    HandleData *data;
+    void *graph = rdxi_graph_from_handle(self, &data);
+
+    struct CommentGroupsArray *groups = rdx_document_comments(graph, data->id);
+    if (groups == NULL) {
+        rb_raise(rb_eRuntimeError, "Document must exist for a valid id");
+    }
+
+    VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)groups));
+    return rb_ensure(document_comments_build, args, document_comments_ensure, args);
 }
 
 // Body function for rb_ensure in Document#definitions
@@ -118,6 +174,7 @@ void rdxi_initialize_document(VALUE mRubydex) {
     rb_define_alloc_func(cDocument, rdxr_handle_alloc);
     rb_define_method(cDocument, "initialize", rdxr_handle_initialize, 2);
     rb_define_method(cDocument, "uri", rdxr_document_uri, 0);
+    rb_define_method(cDocument, "comments", rdxr_document_comments, 0);
     rb_define_method(cDocument, "definitions", rdxr_document_definitions, 0);
     rb_define_method(cDocument, "method_references", rdxr_document_method_references, 0);
 
