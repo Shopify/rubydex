@@ -6218,4 +6218,75 @@ mod visibility_resolution_tests {
         assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
         assert_declaration_does_not_exist!(context, "Foo::<Foo>");
     }
+
+    #[test]
+    fn constant_path_to_private_constant_is_reported() {
+        let mut context = graph_test();
+        // Only `::` enforces `private_constant`. References from the lexical scope or through inheritance are fine,
+        // but a constant path raises even inside the class itself
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              PRIV = 1
+              private_constant :PRIV
+
+              PRIV
+              Foo::PRIV
+
+              class Inner
+                PRIV
+              end
+            end
+
+            class Sub < Foo
+              PRIV
+            end
+
+            Foo::PRIV
+            Sub::PRIV
+            "
+        });
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "PrivateConstantReference: private constant `Foo::PRIV` referenced with a constant path (6:8-6:12)",
+                "PrivateConstantReference: private constant `Foo::PRIV` referenced with a constant path (17:6-17:10)",
+                "PrivateConstantReference: private constant `Foo::PRIV` referenced with a constant path (18:6-18:10)",
+            ],
+            &[Rule::ParseWarning]
+        );
+
+        // The references still resolve, so navigation keeps working
+        assert_constant_reference_to!(context, "Foo::PRIV", "file:///foo.rb:17:6-17:10");
+        assert_constant_reference_to!(context, "Foo::PRIV", "file:///foo.rb:14:3-14:7");
+    }
+
+    #[test]
+    fn top_level_constant_path_to_private_constant_is_reported() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Object
+              TOP = 1
+              private_constant :TOP
+            end
+
+            TOP
+            ::TOP
+            Object::TOP
+            "
+        });
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "PrivateConstantReference: private constant `TOP` referenced with a constant path (7:3-7:6)",
+                "PrivateConstantReference: private constant `TOP` referenced with a constant path (8:9-8:12)",
+            ],
+            &[Rule::ParseWarning]
+        );
+    }
 }

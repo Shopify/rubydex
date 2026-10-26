@@ -101,6 +101,9 @@ pub struct Resolver<'a> {
     made_progress: bool,
     /// The linearization context carried across recursion
     context: LinearizationContext,
+    /// Constant path references (`Foo::BAR`, `::BAR`) resolved in this run. Their visibility can only be checked once
+    /// `private_constant` calls are applied, after the convergence loop
+    resolved_constant_paths: Vec<ConstantReferenceId>,
 }
 
 impl<'a> Resolver<'a> {
@@ -110,6 +113,7 @@ impl<'a> Resolver<'a> {
             unit_queue: VecDeque::new(),
             made_progress: false,
             context: LinearizationContext::new(),
+            resolved_constant_paths: Vec::new(),
         }
     }
 
@@ -165,6 +169,53 @@ impl<'a> Resolver<'a> {
         self.graph.extend_work(std::mem::take(&mut self.unit_queue));
 
         self.handle_remaining_definitions(other_ids);
+        self.report_private_constant_paths();
+    }
+
+    /// Emits a diagnostic for every constant path resolved in this run that names a private constant. Only the `::`
+    /// operator enforces `private_constant`: unqualified references from the lexical scope or through inheritance are
+    /// allowed, and so is `const_get`.
+    fn report_private_constant_paths(&mut self) {
+        for reference_id in std::mem::take(&mut self.resolved_constant_paths) {
+            let Some(reference) = self.graph.constant_references().get(&reference_id) else {
+                continue;
+            };
+            let (uri_id, offset) = (reference.uri_id(), reference.offset().clone());
+            let NameRef::Resolved(resolved) = self.graph.names().get(reference.name_id()).unwrap() else {
+                continue;
+            };
+            let declaration_id = *resolved.declaration_id();
+
+            if self.graph.visibility(&declaration_id) != Some(Visibility::Private) {
+                continue;
+            }
+
+            // A reference can be resolved again without its document being re-indexed, which is what clears
+            // document diagnostics. Don't report the same reference twice
+            let already_reported = self.graph.documents().get(&uri_id).is_some_and(|document| {
+                document.diagnostics().iter().any(|diagnostic| {
+                    *diagnostic.rule() == Rule::PrivateConstantReference && *diagnostic.offset() == offset
+                })
+            });
+            if already_reported {
+                continue;
+            }
+
+            let name = self
+                .graph
+                .declarations()
+                .get(&declaration_id)
+                .unwrap()
+                .name()
+                .to_string();
+            let diagnostic = Diagnostic::new(
+                Rule::PrivateConstantReference,
+                uri_id,
+                offset,
+                format!("private constant `{name}` referenced with a constant path"),
+            );
+            self.graph.add_document_diagnostic(uri_id, diagnostic);
+        }
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -284,9 +335,17 @@ impl<'a> Resolver<'a> {
     fn handle_reference_unit(&mut self, unit_id: Unit, id: ConstantReferenceId) {
         let constant_ref = self.graph.constant_references().get(&id).unwrap();
 
+        let is_constant_path = matches!(
+            self.graph.names().get(constant_ref.name_id()).unwrap().parent_scope(),
+            ParentScope::Some(_) | ParentScope::TopLevel
+        );
+
         match self.resolve_constant_internal(*constant_ref.name_id()) {
             Outcome::Resolved(declaration_id) => {
                 self.graph.record_resolved_reference(id, declaration_id);
+                if is_constant_path {
+                    self.resolved_constant_paths.push(id);
+                }
                 self.made_progress = true;
             }
             Outcome::Retry { .. } => {

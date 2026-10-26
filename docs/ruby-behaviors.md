@@ -1064,6 +1064,7 @@ Foo.constants  # => [] (private constants hidden from .constants)
 - `Foo.constants` excludes private constants
 - `Foo.const_defined?(:PRIV)` returns **true** even for private constants — visibility doesn't affect `const_defined?`
 - `Foo.const_get(:PRIV)` **bypasses** private constant visibility and returns the value — only the `::` operator enforces `private_constant`
+- The `::` operator enforces it everywhere, even inside the class itself (`Foo::PRIV` within `class Foo`) and for top-level constants (`::PRIV`, `Object::PRIV`). Rubydex still resolves these references, so navigation works, and reports them as `PrivateConstantReference`
 
 #### `public_constant`
 
