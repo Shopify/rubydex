@@ -1846,6 +1846,72 @@ mod prepend_tests {
         assert_no_members!(context, "Foo::Bar::Qux");
         assert_owner_eq!(context, "Foo::Bar::Qux", "Foo::Bar");
     }
+
+    #[test]
+    fn qualified_reference_checks_prepended_namespace_own_members_first() {
+        let mut context = graph_test();
+        // CRuby reads the start namespace's own constant table before its prepended modules. Only later steps of
+        // the walk skip a prepended class in favour of its origin, so `C::X` is `C::X` while `D::X` is `P::X`
+        context.index_uri("file:///foo.rb", {
+            r"
+            module P
+              X = 1
+            end
+
+            class C
+              prepend P
+              X = 2
+            end
+
+            class D < C; end
+
+            C::X
+            D::X
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_to!(context, "C::X", "file:///foo.rb:12:4-12:5");
+        assert_constant_reference_to!(context, "P::X", "file:///foo.rb:13:4-13:5");
+    }
+
+    #[test]
+    fn object_fallback_checks_object_own_members_before_its_prepends() {
+        let mut context = graph_test();
+        // Top-level references and the module fallback both search from Object, so Object's own `X` wins over the
+        // `X` of a module prepended to it. A class starts from itself, so it reaches `PP::X` first
+        context.index_uri("file:///foo.rb", {
+            r"
+            module PP
+              X = 1
+            end
+
+            class Object
+              prepend PP
+              X = 2
+            end
+
+            module Mod
+              X
+            end
+
+            class Klass
+              X
+            end
+
+            ::X
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_to!(context, "X", "file:///foo.rb:11:3-11:4");
+        assert_constant_reference_to!(context, "PP::X", "file:///foo.rb:15:3-15:4");
+        assert_constant_reference_to!(context, "X", "file:///foo.rb:18:3-18:4");
+    }
 }
 
 mod mixin_dedup_tests {

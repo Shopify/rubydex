@@ -1387,6 +1387,30 @@ class Child < Parent
 end
 ```
 
+### The Starting Namespace Is Checked Before Its Prepends
+
+Every constant search starts by checking the starting namespace's own constants, and only then walks its ancestors.
+This is invisible unless something is prepended to the starting namespace: `rb_const_search_from` only skips a
+prepended class in favour of its origin after the first step of the walk.
+
+```ruby
+module P; X = 1; end
+
+class C
+  prepend P
+  X = 2
+end
+
+class D < C; end
+
+C.ancestors # => [P, C, Object, Kernel, BasicObject]
+C::X        # => 2, C's own constant comes first
+D::X        # => 1, the walk from D reaches P before C
+```
+
+The same applies to the searches that start from `Object`: top-level references, `::X` and the module fallback all
+check `Object`'s own constants before any module prepended to `Object`.
+
 ### Constant Paths
 
 Ruby supports qualified constant paths:

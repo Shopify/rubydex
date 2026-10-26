@@ -1748,7 +1748,30 @@ impl<'a> Resolver<'a> {
     }
 
     /// Search for a member in a declaration's ancestor chain.
+    ///
+    /// The declaration's own members are checked first, even when modules are prepended to it. This matches
+    /// `rb_const_search_from`, which only skips a prepended class in favour of its origin after the first iteration:
+    ///
+    /// ```ruby
+    /// module P; X = 1; end
+    /// class C
+    ///   prepend P
+    ///   X = 2
+    /// end
+    ///
+    /// C::X # => 2, even though C.ancestors is [P, C, ...]
+    /// ```
     fn search_ancestors(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
+        if let Some(id) = self
+            .graph
+            .declarations()
+            .get(&declaration_id)
+            .and_then(|declaration| declaration.as_namespace())
+            .and_then(|namespace| namespace.member(&str_id))
+        {
+            return Outcome::Resolved(*id);
+        }
+
         match self.linearize_ancestors(declaration_id) {
             Ancestors::Complete(ids) | Ancestors::Cyclic(ids) => ids
                 .iter()
