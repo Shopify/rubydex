@@ -28,4 +28,4 @@ complexity = "deny"
 style = "deny"
 pedantic = "warn"
 
-ptr-as-ptr = { level = "deny", priority = 1 }
+ptr_as_ptr = { level = "deny", priority = 1 }
