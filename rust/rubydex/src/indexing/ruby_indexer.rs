@@ -1,5 +1,7 @@
 //! Visit the Ruby AST and create the definitions.
 
+use std::collections::HashSet;
+
 use crate::diagnostic::Rule;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
@@ -89,6 +91,8 @@ pub struct RubyIndexer<'a> {
     nesting_stack: Vec<Nesting>,
     visibility_stack: Vec<VisibilityModifier>,
     pending_decorator_offset: Option<Offset>,
+    /// Start offsets of the program's top level statements, where `self` is `main`
+    top_level_statements: HashSet<u32>,
 }
 
 impl<'a> RubyIndexer<'a> {
@@ -105,6 +109,7 @@ impl<'a> RubyIndexer<'a> {
             nesting_stack: Vec::new(),
             visibility_stack: vec![VisibilityModifier::new(Visibility::Private, false, Offset::new(0, 0))],
             pending_decorator_offset: None,
+            top_level_statements: HashSet::new(),
         }
     }
 
@@ -133,6 +138,14 @@ impl<'a> RubyIndexer<'a> {
         }
 
         self.comments = self.parse_comments_into_groups(&result);
+        if let Some(program) = result.node().as_program_node() {
+            self.top_level_statements = program
+                .statements()
+                .body()
+                .iter()
+                .map(|statement| statement.location().start())
+                .collect();
+        }
         self.visit(&result.node());
     }
 
@@ -990,8 +1003,17 @@ impl<'a> RubyIndexer<'a> {
             return;
         }
 
-        let Some(lexical_nesting_id) = parent_nesting_id else {
-            return;
+        let lexical_nesting_id = match parent_nesting_id {
+            Some(id) => id,
+            // A top level `include` statement is `main.include`, which includes the module into `Object`. Record it
+            // as a reopening of `Object` at the call site. Inside a block (`Struct.new do ... end`) `self` is unknown,
+            // top level `prepend` doesn't exist and top level `extend` only affects `main`, so those are skipped
+            None if matches!(mixin_type, MixinType::Include)
+                && self.top_level_statements.contains(&node.location().start()) =>
+            {
+                self.add_top_level_object_definition(node)
+            }
+            None => return,
         };
 
         // Mixin operations with multiple arguments are inserted in reverse, so that they are processed in the expected
@@ -1014,6 +1036,26 @@ impl<'a> RubyIndexer<'a> {
                 _ => {}
             }
         }
+    }
+
+    /// Adds a definition reopening `Object` at the location of a top level `include`, so that the mixin is part of
+    /// `Object`'s ancestors.
+    fn add_top_level_object_definition(&mut self, node: &ruby_prism::CallNode) -> DefinitionId {
+        let str_id = self.local_graph.intern_string("Object".to_string());
+        let name_id = self.local_graph.add_name(str_id, ParentScope::None, None);
+        let offset = Offset::from_prism_location(&node.location());
+
+        self.local_graph
+            .add_definition(Definition::Class(Box::new(ClassDefinition::new(
+                name_id,
+                self.uri_id,
+                offset.clone(),
+                offset,
+                Box::default(),
+                DefinitionFlags::empty(),
+                None,
+                None,
+            ))))
     }
 
     /// Indexes a method reference for a call node, creating constant references for the receiver when applicable.

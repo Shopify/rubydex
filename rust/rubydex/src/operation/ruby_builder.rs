@@ -3,6 +3,7 @@
 //! Walks the parsed AST and produces `Vec<Operation>` that can later be applied
 //! by the applier to create definitions and declarations in a `LocalGraph`.
 
+use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 
 use crate::diagnostic::{Diagnostic, Rule};
@@ -81,6 +82,8 @@ pub struct RubyOperationBuilder<'a> {
     nesting_stack: Vec<Nesting>,
     visibility_stack: Vec<VisibilityModifier>,
     pending_decorator_offset: Option<Offset>,
+    /// Start offsets of the program's top level statements, where `self` is `main`
+    top_level_statements: HashSet<u32>,
     // Output
     operations: Vec<Operation>,
 }
@@ -100,6 +103,7 @@ impl<'a> RubyOperationBuilder<'a> {
             nesting_stack: Vec::new(),
             visibility_stack: vec![VisibilityModifier::new(Visibility::Private, false, Offset::new(0, 0))],
             pending_decorator_offset: None,
+            top_level_statements: HashSet::new(),
             operations: Vec::new(),
         }
     }
@@ -125,6 +129,14 @@ impl<'a> RubyOperationBuilder<'a> {
         }
 
         self.comments = self.parse_comments_into_groups(&result);
+        if let Some(program) = result.node().as_program_node() {
+            self.top_level_statements = program
+                .statements()
+                .body()
+                .iter()
+                .map(|statement| statement.location().start())
+                .collect();
+        }
         self.visit(&result.node());
 
         OperationBuilderResult {
@@ -859,8 +871,35 @@ impl<'a> RubyOperationBuilder<'a> {
             })
             .collect::<Vec<(NameId, Offset)>>();
 
-        if mixin_arguments.is_empty() || !has_owner {
+        if mixin_arguments.is_empty() {
             return;
+        }
+
+        // A top level `include` statement is `main.include`, which includes the module into `Object`. Record it as a
+        // reopening of `Object` at the call site. Inside a block (`Struct.new do ... end`) `self` is unknown, top level
+        // `prepend` doesn't exist and top level `extend` only affects `main`, so those are skipped
+        let reopens_object = !has_owner
+            && matches!(kind, MixinKind::Include)
+            && self.top_level_statements.contains(&node.location().start());
+        if !has_owner && !reopens_object {
+            return;
+        }
+
+        if reopens_object {
+            let str_id = self.intern_string("Object".to_string());
+            let name_id = self.add_name(str_id, ParentScope::None, None);
+            let offset = Offset::from_prism_location(&node.location());
+
+            self.operations.push(Operation::EnterClass(op::EnterClass {
+                name_id,
+                uri_id: self.uri_id,
+                offset: offset.clone(),
+                name_offset: offset,
+                comments: Box::default(),
+                flags: DefinitionFlags::empty(),
+                superclass_name: None,
+                is_lexical_scope: false,
+            }));
         }
 
         // Mixin operations with multiple arguments are inserted in reverse
@@ -876,6 +915,10 @@ impl<'a> RubyOperationBuilder<'a> {
                 kind,
                 target: Target::Constant(name_id),
             }));
+        }
+
+        if reopens_object {
+            self.operations.push(Operation::ExitScope);
         }
     }
 

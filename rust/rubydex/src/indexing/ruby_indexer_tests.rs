@@ -3779,8 +3779,8 @@ mod mixin_tests {
 
         assert_no_local_diagnostics!(&context);
 
-        // FIXME: This should be indexed
-        assert_eq!(context.graph().definitions().len(), 0);
+        // Each top level `include` reopens `Object` at the call site, so the mixins become part of Object's ancestors
+        assert_eq!(context.graph().definitions().len(), 2);
     }
 
     #[test]

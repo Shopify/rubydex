@@ -1616,6 +1616,41 @@ mod include_tests {
             "C should have a partial chain: the `Missing` include never resolves"
         );
     }
+
+    #[test]
+    fn top_level_include_includes_into_object() {
+        let mut context = graph_test();
+        // `include` at the top level is `main.include`, which includes the module into Object
+        context.index_uri("file:///foo.rb", {
+            r"
+            module M
+              MX = 1
+            end
+
+            include M
+
+            class Foo
+              MX
+            end
+
+            module Bar
+              MX
+            end
+
+            Foo::MX
+            MX
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_to!(context, "M", "file:///foo.rb:5:9-5:10");
+        assert_constant_reference_to!(context, "M::MX", "file:///foo.rb:8:3-8:5");
+        assert_constant_reference_to!(context, "M::MX", "file:///foo.rb:12:3-12:5");
+        assert_constant_reference_to!(context, "M::MX", "file:///foo.rb:15:6-15:8");
+        assert_constant_reference_to!(context, "M::MX", "file:///foo.rb:16:1-16:3");
+    }
 }
 
 mod prepend_tests {
