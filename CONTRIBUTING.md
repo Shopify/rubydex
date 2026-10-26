@@ -83,18 +83,7 @@ To cut a new release:
    bundle lock --local
    ```
 
-5. Run the local validation suite:
-
-   ```sh
-   bundle exec rake check
-   bundle exec rake compile_release
-   ```
-
-   `compile_release` builds with `RELEASE=true`, which verifies the packaging
-   path for the precompiled native extension, the `rubydex_mcp` binary, and
-   bundled third-party license output.
-
-6. Commit the version bump directly on `main`:
+5. Commit the version bump directly on `main`:
 
    ```sh
    git add lib/rubydex/version.rb rust/Cargo.toml rust/rubydex-sys/Cargo.toml rust/Cargo.lock Gemfile.lock
@@ -102,7 +91,7 @@ To cut a new release:
    git push origin main
    ```
 
-7. Tag the same commit using `v` followed by the generated Ruby version, then
+6. Tag the same commit using `v` followed by the generated Ruby version, then
    push the tag:
 
    ```sh
