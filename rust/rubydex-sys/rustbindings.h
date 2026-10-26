@@ -328,7 +328,7 @@ typedef struct CQueryResult {
 /**
  * C-compatible owned UTF-8 string with an explicit length. Unlike a C string, it is not NUL-terminated and may
  * contain NUL bytes, which source code can put into names, comments and diagnostic messages. A null `data` means
- * there is no string
+ * there is no string. Dropping it frees the bytes
  */
 typedef struct OwnedString {
     const char *data;
@@ -386,7 +386,7 @@ typedef union CCellPayload {
      */
     int64_t int_val;
     /**
-     * `Str`: owned string (freed by `rdx_rows_iter_free`).
+     * `Str`: owned string (freed by `rdx_rows_iter_free`). A union never drops its fields, so `free_cell` drops it.
      */
     struct OwnedString str_val;
     /**

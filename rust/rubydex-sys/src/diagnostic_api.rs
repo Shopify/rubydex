@@ -120,13 +120,12 @@ pub unsafe extern "C" fn rdx_diagnostics_free(ptr: *mut DiagnosticArray) {
         let mut boxed_slice: Box<[DiagnosticEntry]> = unsafe { Box::from_raw(slice_ptr) };
 
         for entry in &mut *boxed_slice {
-            unsafe { entry.message.free() };
             if !entry.location.is_null() {
                 unsafe { crate::location_api::rdx_location_free(entry.location) };
                 entry.location = ptr::null_mut();
             }
         }
-        // boxed_slice drops here, releasing the buffer
+        // boxed_slice drops here, releasing the buffer and each entry's message
     }
     // array drops here
 }

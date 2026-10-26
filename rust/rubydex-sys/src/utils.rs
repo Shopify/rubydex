@@ -45,9 +45,8 @@ pub extern "C" fn free_c_string(ptr: *const c_char) {
 
 /// C-compatible owned UTF-8 string with an explicit length. Unlike a C string, it is not NUL-terminated and may
 /// contain NUL bytes, which source code can put into names, comments and diagnostic messages. A null `data` means
-/// there is no string
+/// there is no string. Dropping it frees the bytes
 #[repr(C)]
-#[derive(Clone, Copy)]
 pub struct OwnedString {
     pub data: *const c_char,
     pub length: usize,
@@ -70,13 +69,13 @@ impl OwnedString {
             length: 0,
         }
     }
+}
 
-    /// # Safety
-    ///
-    /// - The string must have been created by `OwnedString::new` (or be null) and must not be used after being freed
-    pub unsafe fn free(self) {
+impl Drop for OwnedString {
+    fn drop(&mut self) {
         if !self.data.is_null() {
             let bytes = ptr::slice_from_raw_parts_mut(self.data.cast_mut().cast::<u8>(), self.length);
+            // SAFETY: a non-null `data` always comes from `Box::into_raw` in `OwnedString::new`, with `length` bytes
             let _ = unsafe { Box::from_raw(bytes) };
         }
     }
@@ -89,7 +88,7 @@ impl OwnedString {
 /// - `string` must have been returned by a rubydex function and must not be used after being freed
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_owned_string(string: OwnedString) {
-    unsafe { string.free() }
+    drop(string);
 }
 
 /// Frees a boxed u64 allocated on the Rust side

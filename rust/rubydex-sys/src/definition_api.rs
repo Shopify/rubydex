@@ -279,14 +279,13 @@ pub unsafe extern "C" fn rdx_definition_comments_free(ptr: *mut CommentArray) {
         let mut boxed_slice: Box<[CommentEntry]> = unsafe { Box::from_raw(slice_ptr) };
 
         for item in &mut boxed_slice {
-            unsafe { item.string.free() };
             if !item.location.is_null() {
                 unsafe { crate::location_api::rdx_location_free(item.location) };
                 item.location = ptr::null_mut();
             }
         }
 
-        // boxed_slice is dropped here, freeing the items buffer
+        // boxed_slice is dropped here, freeing the items buffer and each item's string
     }
     // arr is dropped here
 }
