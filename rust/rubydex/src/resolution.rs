@@ -104,6 +104,9 @@ pub struct Resolver<'a> {
     /// Constant path references (`Foo::BAR`, `::BAR`) resolved in this run. Their visibility can only be checked once
     /// `private_constant` calls are applied, after the convergence loop
     resolved_constant_paths: Vec<ConstantReferenceId>,
+    /// Conditional (`||=`) definitions already put back once because their lookup was blocked by a partial ancestor
+    /// chain
+    deferred_conditionals: IdentityHashSet<DefinitionId>,
 }
 
 impl<'a> Resolver<'a> {
@@ -114,6 +117,7 @@ impl<'a> Resolver<'a> {
             made_progress: false,
             context: LinearizationContext::new(),
             resolved_constant_paths: Vec::new(),
+            deferred_conditionals: IdentityHashSet::default(),
         }
     }
 
@@ -229,6 +233,15 @@ impl<'a> Resolver<'a> {
 
     /// Handles a unit of work for resolving a constant definition or singleton method
     fn handle_definition_unit(&mut self, unit_id: Unit, id: DefinitionId) {
+        if let Some(outcome) = self.resolve_conditional_definition(id) {
+            match outcome {
+                Outcome::Retry { .. } => self.unit_queue.push_back(unit_id),
+                Outcome::Resolved(_) => self.made_progress = true,
+                Outcome::Unresolved => {}
+            }
+            return;
+        }
+
         let mut needs_linearization = false;
 
         let outcome = match self.graph.definitions().get(&id).unwrap() {
@@ -303,6 +316,88 @@ impl<'a> Resolver<'a> {
                 }
                 self.made_progress = true;
             }
+        }
+    }
+
+    /// `X ||= value` is `defined?(X) ? X : (X = value)`: it only defines `X` when the lookup for `X` fails. When a
+    /// conditional definition's constant is already reachable from its scope and owned by some other namespace, the
+    /// definition doesn't create a declaration. It joins the existing one, which is also what its name resolves to.
+    ///
+    /// ```ruby
+    /// class Parent
+    ///   VERSION = "1"
+    /// end
+    ///
+    /// class Child < Parent
+    ///   VERSION ||= "2" # Parent::VERSION already exists, so this defines nothing
+    /// end
+    /// ```
+    ///
+    /// Returns `None` when the definition should be handled like any other constant definition.
+    fn resolve_conditional_definition(&mut self, id: DefinitionId) -> Option<Outcome> {
+        let name_id = match self.graph.definitions().get(&id).unwrap() {
+            Definition::Constant(it) if it.flags().is_conditional() => *it.name_id(),
+            Definition::ConstantAlias(it) if it.flags().is_conditional() => *it.name_id(),
+            _ => return None,
+        };
+
+        let existing_id = match self.lookup_existing_constant(name_id) {
+            Outcome::Resolved(existing_id) => existing_id,
+            // The lookup may still succeed once more ancestors are known. Wait for them once, then give up and treat
+            // this as a plain definition
+            Outcome::Retry { .. } if self.deferred_conditionals.insert(id) => {
+                return Some(Outcome::Retry {
+                    partial_ancestors: true,
+                });
+            }
+            _ => return None,
+        };
+
+        let Outcome::Resolved(owner_id) = self.name_owner_id(name_id, false) else {
+            return None;
+        };
+
+        let existing = self.graph.declarations().get(&existing_id).unwrap();
+        if *existing.owner_id() == owner_id
+            || !matches!(existing, Declaration::Constant(_) | Declaration::ConstantAlias(_))
+        {
+            return None;
+        }
+
+        let existing_name = existing.name().to_string();
+        let existing_owner_id = *existing.owner_id();
+        // `add_declaration` deduplicates by fully qualified name, so this appends the definition to the existing
+        // declaration
+        self.graph.add_declaration(id, existing_name, |name| {
+            Declaration::Constant(Box::new(ConstantDeclaration::new(name, existing_owner_id)))
+        });
+        self.graph.record_resolved_name(name_id, existing_id);
+        Some(Outcome::Resolved(existing_id))
+    }
+
+    /// Looks a constant name up the way `defined?` does for the target of `||=`: lexically for a bare name, through
+    /// the parent scope's ancestors for a constant path
+    fn lookup_existing_constant(&mut self, name_id: NameId) -> Outcome {
+        let name = match self.graph.names().get(&name_id).unwrap() {
+            NameRef::Resolved(resolved) => return Outcome::Resolved(*resolved.declaration_id()),
+            NameRef::Unresolved(name) => name.as_ref().clone(),
+        };
+        let str_id = *name.str();
+
+        match name.parent_scope() {
+            ParentScope::None => self.run_resolution(&name),
+            ParentScope::TopLevel => self.search_ancestors(*OBJECT_ID, str_id),
+            ParentScope::Some(parent_scope_id) => {
+                let NameRef::Resolved(parent_scope) = self.graph.names().get(parent_scope_id).unwrap() else {
+                    return Outcome::Unresolved;
+                };
+
+                match self.resolve_to_namespace(*parent_scope.declaration_id()) {
+                    Some(namespace_id) => self.search_qualified(namespace_id, str_id),
+                    None => Outcome::Unresolved,
+                }
+            }
+            ParentScope::Attached(_) => Outcome::Unresolved,
         }
     }
 

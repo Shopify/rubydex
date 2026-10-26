@@ -617,6 +617,10 @@ impl<'a> RubyIndexer<'a> {
         if promotable {
             flags |= DefinitionFlags::PROMOTABLE;
         }
+        // Only `||=` writes also reference the constant
+        if also_add_reference {
+            flags |= DefinitionFlags::CONDITIONAL;
+        }
         let lexical_nesting_id = self.parent_lexical_scope_id();
 
         let definition = Definition::Constant(Box::new(ConstantDefinition::new(
@@ -901,7 +905,11 @@ impl<'a> RubyIndexer<'a> {
         };
 
         let offset = Offset::from_prism_location(&location);
-        let (comments, flags) = self.find_comments_for(offset.start());
+        let (comments, mut flags) = self.find_comments_for(offset.start());
+        // Only `||=` writes also reference the constant
+        if also_add_reference {
+            flags |= DefinitionFlags::CONDITIONAL;
+        }
         let lexical_nesting_id = self.parent_lexical_scope_id();
 
         let alias_constant = ConstantDefinition::new(name_id, self.uri_id, offset, comments, flags, lexical_nesting_id);

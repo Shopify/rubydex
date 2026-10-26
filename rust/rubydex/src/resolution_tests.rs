@@ -233,6 +233,71 @@ mod constant_resolution_tests {
         assert_constant_reference_unresolved!(context, "Baz", "file:///foo.rb:9:11-9:14");
         assert_constant_reference_to!(context, "Bar::Baz", "file:///foo.rb:10:19-10:22");
     }
+
+    #[test]
+    fn or_assign_does_not_define_a_constant_that_is_already_reachable() {
+        let mut context = graph_test();
+        // `X ||= value` is `defined?(X) ? X : (X = value)`, so it only defines X when the lookup for X fails
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Parent
+              VERSION = 1
+              WIDTH = 1
+            end
+
+            class Child < Parent
+              VERSION ||= 2
+              VERSION
+            end
+
+            Child::VERSION
+            Child::WIDTH ||= 2
+
+            TOP = 1
+            module Bar
+              TOP ||= 2
+              TOP
+            end
+
+            module Fresh
+              FRESH ||= 1
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_declaration_does_not_exist!(context, "Child::VERSION");
+        assert_declaration_does_not_exist!(context, "Child::WIDTH");
+        assert_declaration_does_not_exist!(context, "Bar::TOP");
+        assert_declaration_exists!(context, "Fresh::FRESH");
+
+        assert_constant_reference_to!(context, "Parent::VERSION", "file:///foo.rb:7:3-7:10");
+        assert_constant_reference_to!(context, "Parent::VERSION", "file:///foo.rb:11:8-11:15");
+        assert_constant_reference_to!(context, "TOP", "file:///foo.rb:17:3-17:6");
+    }
+
+    #[test]
+    fn or_assign_through_a_constant_path_defines_the_constant_when_missing() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            TOP = 1
+            class Foo; end
+
+            Foo::TOP ||= 2
+            Foo::NEW ||= 3
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        // A qualified lookup doesn't see Object's own constants, so `Foo::TOP ||=` defines Foo::TOP
+        assert_declaration_exists!(context, "Foo::TOP");
+        assert_declaration_exists!(context, "Foo::NEW");
+    }
 }
 
 mod constant_alias_tests {

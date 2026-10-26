@@ -1004,6 +1004,10 @@ impl<'a> RubyOperationBuilder<'a> {
         if promotable {
             flags |= DefinitionFlags::PROMOTABLE;
         }
+        // Only `||=` writes also reference the constant
+        if also_add_reference {
+            flags |= DefinitionFlags::CONDITIONAL;
+        }
         self.operations.push(Operation::DefineConstant(op::DefineConstant {
             name_id,
             uri_id: self.uri_id,
@@ -1064,7 +1068,11 @@ impl<'a> RubyOperationBuilder<'a> {
         };
 
         let offset = Offset::from_prism_location(&location);
-        let (comments, flags) = self.find_comments_for(offset.start());
+        let (comments, mut flags) = self.find_comments_for(offset.start());
+        // Only `||=` writes also reference the constant
+        if also_add_reference {
+            flags |= DefinitionFlags::CONDITIONAL;
+        }
 
         self.operations.push(Operation::AliasConstant(op::AliasConstant {
             name_id,

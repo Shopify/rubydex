@@ -1440,6 +1440,26 @@ Foo::K      # => 2
 Object::TOP # => 1
 ```
 
+### Conditional Assignment
+
+`X ||= value` is `defined?(X) ? X : (X = value)`. The `defined?` check is the full lookup for `X` (lexical scopes,
+ancestors, the module fallback), so the assignment only happens when `X` isn't reachable yet:
+
+```ruby
+class Parent
+  VERSION = "1"
+end
+
+class Child < Parent
+  VERSION ||= "2" # defines nothing: VERSION resolves to Parent::VERSION
+end
+
+Child.const_defined?(:VERSION, false) # => false
+```
+
+For a constant path, `Foo::X ||= value` uses the qualified lookup, so a top-level `X` does not count and `Foo::X` is
+defined.
+
 ## Constant Aliases
 
 Constants can be assigned to reference other constants, creating **aliases**:
