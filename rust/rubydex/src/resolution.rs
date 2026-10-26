@@ -1568,7 +1568,7 @@ impl<'a> Resolver<'a> {
                         Some(Declaration::Namespace(_)) => {
                             found_namespace = true;
 
-                            match self.search_ancestors(id, *name.str()) {
+                            match self.search_qualified(id, *name.str()) {
                                 Outcome::Resolved(declaration_id) => {
                                     self.graph.record_resolved_name(name_id, declaration_id);
                                     return Outcome::Resolved(declaration_id);
@@ -1747,6 +1747,28 @@ impl<'a> Resolver<'a> {
         self.search_ancestors(*OBJECT_ID, str_id)
     }
 
+    /// Search for a member in a declaration's ancestor chain, as a bare constant reference does.
+    fn search_ancestors(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
+        self.search_ancestors_from(declaration_id, str_id, false)
+    }
+
+    /// Search for a member in a declaration's ancestor chain, as a qualified reference (`Foo::Bar`) does: if the first
+    /// owner found is `Object` itself and the search did not start at `Object`, the constant is not found. This is the
+    /// `exclude` flag of the VM's `rb_const_search_from`. Constants owned by ancestors after `Object` (like `Kernel`)
+    /// are still found:
+    ///
+    /// ```ruby
+    /// TOP = 1
+    /// module Kernel; K = 2; end
+    /// class Foo; end
+    ///
+    /// Foo::TOP # NameError: uninitialized constant Foo::TOP
+    /// Foo::K   # => 2
+    /// ```
+    fn search_qualified(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
+        self.search_ancestors_from(declaration_id, str_id, declaration_id != *OBJECT_ID)
+    }
+
     /// Search for a member in a declaration's ancestor chain.
     ///
     /// The declaration's own members are checked first, even when modules are prepended to it. This matches
@@ -1761,7 +1783,12 @@ impl<'a> Resolver<'a> {
     ///
     /// C::X # => 2, even though C.ancestors is [P, C, ...]
     /// ```
-    fn search_ancestors(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
+    fn search_ancestors_from(
+        &mut self,
+        declaration_id: DeclarationId,
+        str_id: StringId,
+        exclude_object: bool,
+    ) -> Outcome {
         if let Some(id) = self
             .graph
             .declarations()
@@ -1784,7 +1811,13 @@ impl<'a> Resolver<'a> {
                             .as_namespace()
                             .unwrap()
                             .member(&str_id)
-                            .map(|id| Outcome::Resolved(*id))
+                            .map(|id| {
+                                if exclude_object && *ancestor_id == *OBJECT_ID {
+                                    Outcome::Unresolved
+                                } else {
+                                    Outcome::Resolved(*id)
+                                }
+                            })
                     } else {
                         None
                     }
@@ -1812,6 +1845,10 @@ impl<'a> Resolver<'a> {
                                 .unwrap()
                                 .member(&str_id)
                             {
+                                if exclude_object && ancestor_id == *OBJECT_ID {
+                                    return Outcome::Unresolved;
+                                }
+
                                 return Outcome::Resolved(*id);
                             }
                         }

@@ -148,6 +148,91 @@ mod constant_resolution_tests {
         assert_no_members!(context, "Bar::Baz");
         assert_owner_eq!(context, "Bar::Baz", "Bar");
     }
+
+    #[test]
+    fn qualified_reference_does_not_find_constants_owned_by_object() {
+        let mut context = graph_test();
+        // `Foo::TOP` raises NameError in Ruby: a qualified search stops when the first owner it finds is Object itself,
+        // unless the search started at Object. Owners after Object in the chain, like Kernel, are still found
+        context.index_uri("file:///foo.rb", {
+            r"
+            TOP = 1
+
+            module Kernel
+              KERNEL_CONST = 2
+            end
+
+            class Foo; end
+
+            Foo::TOP
+            Foo::Foo
+            Foo::KERNEL_CONST
+            Object::TOP
+            ::TOP
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_unresolved!(context, "TOP", "file:///foo.rb:9:6-9:9");
+        assert_constant_reference_unresolved!(context, "Foo", "file:///foo.rb:10:6-10:9");
+        assert_constant_reference_to!(context, "Kernel::KERNEL_CONST", "file:///foo.rb:11:6-11:18");
+        assert_constant_reference_to!(context, "TOP", "file:///foo.rb:12:9-12:12");
+        assert_constant_reference_to!(context, "TOP", "file:///foo.rb:13:3-13:6");
+    }
+
+    #[test]
+    fn qualified_reference_stops_at_object_even_if_a_later_ancestor_has_the_constant() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Kernel
+              DUP = 1
+            end
+
+            class Object
+              DUP = 2
+            end
+
+            class Foo; end
+
+            Foo::DUP
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_unresolved!(context, "DUP", "file:///foo.rb:11:6-11:9");
+    }
+
+    #[test]
+    fn qualified_reference_through_a_top_level_constant_does_not_resolve() {
+        let mut context = graph_test();
+        // `Foo::Bar` is a NameError, so nothing after it can resolve either
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+
+            class Bar
+              Baz = 1
+            end
+
+            ObjectAlias = Object
+
+            Foo::Bar::Baz
+            ObjectAlias::Bar::Baz
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_unresolved!(context, "Bar", "file:///foo.rb:9:6-9:9");
+        assert_constant_reference_unresolved!(context, "Baz", "file:///foo.rb:9:11-9:14");
+        assert_constant_reference_to!(context, "Bar::Baz", "file:///foo.rb:10:19-10:22");
+    }
 }
 
 mod constant_alias_tests {

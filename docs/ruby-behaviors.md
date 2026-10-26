@@ -1425,6 +1425,20 @@ end
 
 Constant paths are resolved left-to-right: `Object` is resolved first, then `String` is looked up within `Object`.
 
+A qualified lookup like `Foo::Bar` searches `Foo` and its ancestors, with two differences from a bare `Bar`: lexical
+scopes are not consulted, and if the first owner found is `Object` itself, the constant is not found unless the
+search started at `Object`. Owners after `Object` in the chain, like `Kernel`, are still found:
+
+```ruby
+TOP = 1
+module Kernel; K = 2; end
+class Foo; end
+
+Foo::TOP    # NameError: uninitialized constant Foo::TOP
+Foo::K      # => 2
+Object::TOP # => 1
+```
+
 ## Constant Aliases
 
 Constants can be assigned to reference other constants, creating **aliases**:
