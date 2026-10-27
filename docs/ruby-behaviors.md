@@ -1440,6 +1440,21 @@ Foo::K      # => 2
 Object::TOP # => 1
 ```
 
+### Superclass With the Same Name
+
+The superclass expression is evaluated before `class` creates the new constant. So in `class Foo < Foo`, the superclass
+can't be the class being defined, and the lookup continues past it: other lexical scopes, the enclosing namespace's
+ancestors, and the top level.
+
+```ruby
+class ApplicationRecord; end
+
+module GSD
+  class ApplicationRecord < ApplicationRecord # superclass is ::ApplicationRecord
+  end
+end
+```
+
 ### Conditional Assignment
 
 `X ||= value` is `defined?(X) ? X : (X = value)`. The `defined?` check is the full lookup for `X` (lexical scopes,

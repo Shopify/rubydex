@@ -670,6 +670,26 @@ impl<'a> RubyIndexer<'a> {
         Some(definition_id)
     }
 
+    /// Indexes the name of a superclass. In `class Foo < Foo`, the superclass is evaluated before `class` creates the new
+    /// `Foo`, so its name is marked to not resolve to the class being defined
+    fn index_superclass_reference(
+        &mut self,
+        superclass_node: &ruby_prism::Node,
+        class_name_node: Option<&ruby_prism::Node>,
+    ) -> Option<NameId> {
+        if let (ruby_prism::Node::ConstantReadNode { .. }, Some(ruby_prism::Node::ConstantReadNode { .. })) =
+            (superclass_node, class_name_node)
+            && superclass_node.location().as_slice() == class_name_node.unwrap().location().as_slice()
+        {
+            let name = Self::location_to_string(&superclass_node.location());
+            let string_id = self.local_graph.intern_string(name);
+            let nesting = self.current_lexical_scope_name_id();
+            return Some(self.local_graph.add_name_before_definition(string_id, nesting));
+        }
+
+        self.index_constant_reference(superclass_node, false)
+    }
+
     fn handle_class_definition(
         &mut self,
         location: &ruby_prism::Location,
@@ -683,7 +703,7 @@ impl<'a> RubyIndexer<'a> {
         let lexical_nesting_id = self.parent_lexical_scope_id();
         let superclass = superclass_node.as_ref().and_then(|n| {
             // Try direct constant reference first
-            if let Some(id) = self.index_constant_reference(n, false) {
+            if let Some(id) = self.index_superclass_reference(n, name_node) {
                 return Some(self.local_graph.add_constant_reference(ConstantReference::new(
                     id,
                     self.uri_id,

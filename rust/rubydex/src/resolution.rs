@@ -1839,9 +1839,18 @@ impl<'a> Resolver<'a> {
 
     fn run_resolution(&mut self, name: &Name) -> Outcome {
         let str_id = *name.str();
+        // The superclass of `class Foo < Foo` is evaluated before the new `Foo` exists, so it can't resolve to it
+        let excluded = if name.is_before_definition() {
+            match self.graph.names().get(&name.defined_name_id()) {
+                Some(NameRef::Resolved(defined)) => Some(*defined.declaration_id()),
+                _ => None,
+            }
+        } else {
+            None
+        };
 
         if let Some(nesting) = name.nesting() {
-            let scope_outcome = self.search_lexical_scopes(name, str_id);
+            let scope_outcome = self.search_lexical_scopes(name, str_id, excluded);
 
             // If we already resolved or need to retry, return early
             if scope_outcome.is_resolved_or_retry() {
@@ -1864,7 +1873,7 @@ impl<'a> Resolver<'a> {
                             }
                             Some(Declaration::Namespace(_)) => {
                                 decl_id = Some(id);
-                                result = self.search_ancestors(id, str_id);
+                                result = self.search_ancestors_from(id, str_id, false, excluded);
                                 break;
                             }
                             _ => {}
@@ -1901,7 +1910,7 @@ impl<'a> Resolver<'a> {
             );
 
             if is_module || chain_incomplete {
-                let object_outcome = self.search_ancestors(*OBJECT_ID, str_id);
+                let object_outcome = self.search_ancestors_from(*OBJECT_ID, str_id, false, excluded);
 
                 match object_outcome {
                     // Found the constant through Object's ancestors.
@@ -1919,12 +1928,12 @@ impl<'a> Resolver<'a> {
         // When there's no nesting, we're working at the top level of a script. The top level is the magic `<main>`
         // object, which is an instance of `Object`. To resolve constants at the top level, we need to search the
         // ancestors of `Object`
-        self.search_ancestors(*OBJECT_ID, str_id)
+        self.search_ancestors_from(*OBJECT_ID, str_id, false, excluded)
     }
 
     /// Search for a member in a declaration's ancestor chain, as a bare constant reference does.
     fn search_ancestors(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
-        self.search_ancestors_from(declaration_id, str_id, false)
+        self.search_ancestors_from(declaration_id, str_id, false, None)
     }
 
     /// Search for a member in a declaration's ancestor chain, as a qualified reference (`Foo::Bar`) does: if the first
@@ -1941,7 +1950,7 @@ impl<'a> Resolver<'a> {
     /// Foo::K   # => 2
     /// ```
     fn search_qualified(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
-        self.search_ancestors_from(declaration_id, str_id, declaration_id != *OBJECT_ID)
+        self.search_ancestors_from(declaration_id, str_id, declaration_id != *OBJECT_ID, None)
     }
 
     /// Search for a member in a declaration's ancestor chain.
@@ -1963,6 +1972,7 @@ impl<'a> Resolver<'a> {
         declaration_id: DeclarationId,
         str_id: StringId,
         exclude_object: bool,
+        excluded: Option<DeclarationId>,
     ) -> Outcome {
         if let Some(id) = self
             .graph
@@ -1970,6 +1980,7 @@ impl<'a> Resolver<'a> {
             .get(&declaration_id)
             .and_then(|declaration| declaration.as_namespace())
             .and_then(|namespace| namespace.member(&str_id))
+            .filter(|id| Some(**id) != excluded)
         {
             return Outcome::Resolved(*id);
         }
@@ -1986,6 +1997,7 @@ impl<'a> Resolver<'a> {
                             .as_namespace()
                             .unwrap()
                             .member(&str_id)
+                            .filter(|id| Some(**id) != excluded)
                             .map(|id| {
                                 if exclude_object && *ancestor_id == *OBJECT_ID {
                                     Outcome::Unresolved
@@ -2019,6 +2031,7 @@ impl<'a> Resolver<'a> {
                                 .as_namespace()
                                 .unwrap()
                                 .member(&str_id)
+                                .filter(|id| Some(**id) != excluded)
                             {
                                 if exclude_object && ancestor_id == *OBJECT_ID {
                                     return Outcome::Unresolved;
@@ -2037,7 +2050,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// Look for the constant in the lexical scopes that are a part of its nesting
-    fn search_lexical_scopes(&self, name: &Name, str_id: StringId) -> Outcome {
+    fn search_lexical_scopes(&self, name: &Name, str_id: StringId, excluded: Option<DeclarationId>) -> Outcome {
         let mut current_name = name;
 
         while let Some(nesting_id) = current_name.nesting() {
@@ -2047,6 +2060,7 @@ impl<'a> Resolver<'a> {
                 if let Some(namespace_id) = self.resolve_to_namespace(declaration_id)
                     && let Some(namespace) = self.graph.declarations().get(&namespace_id).unwrap().as_namespace()
                     && let Some(member) = namespace.member(&str_id)
+                    && Some(*member) != excluded
                 {
                     return Outcome::Resolved(*member);
                 }

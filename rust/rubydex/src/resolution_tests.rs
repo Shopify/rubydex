@@ -1432,6 +1432,69 @@ mod superclass_tests {
             Ancestors::Partial(_)
         ));
     }
+
+    #[test]
+    fn superclass_with_the_same_name_as_the_class_resolves_outside_it() {
+        let mut context = graph_test();
+        // The superclass is evaluated before `class` creates the new constant, so `ApplicationRecord` can't be
+        // `GSD::ApplicationRecord` itself (https://github.com/Shopify/rubydex/issues/1073)
+        context.index_uri("file:///foo.rb", {
+            r"
+            class ApplicationRecord
+            end
+
+            module GSD
+              class ApplicationRecord < ApplicationRecord
+              end
+
+              ApplicationRecord
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_constant_reference_to!(context, "ApplicationRecord", "file:///foo.rb:5:29-5:46");
+        assert_constant_reference_to!(context, "GSD::ApplicationRecord", "file:///foo.rb:8:3-8:20");
+        assert_ancestors_eq!(
+            context,
+            "GSD::ApplicationRecord",
+            [
+                "GSD::ApplicationRecord",
+                "ApplicationRecord",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn superclass_with_the_same_name_as_the_class_still_searches_the_enclosing_namespace_ancestors() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Base
+              class Model; end
+            end
+
+            class Model; end
+
+            module App
+              include Base
+
+              class Model < Model
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_constant_reference_to!(context, "Base::Model", "file:///foo.rb:10:17-10:22");
+    }
 }
 
 mod include_tests {

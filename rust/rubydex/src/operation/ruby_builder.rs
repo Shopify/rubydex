@@ -174,6 +174,17 @@ impl<'a> RubyOperationBuilder<'a> {
 
     fn add_name(&mut self, str: StringId, parent_scope: ParentScope, nesting: Option<NameId>) -> NameId {
         let name = Name::new(&self.names, str, parent_scope, nesting);
+        self.insert_name(name)
+    }
+
+    /// Adds a name evaluated before the constant with the same name in the same scope gets defined, like the superclass
+    /// of `class Foo < Foo`
+    fn add_name_before_definition(&mut self, str: StringId, nesting: Option<NameId>) -> NameId {
+        let name = Name::new(&self.names, str, ParentScope::None, nesting).evaluated_before_definition();
+        self.insert_name(name)
+    }
+
+    fn insert_name(&mut self, name: Name) -> NameId {
         let name_id = name.id();
 
         match self.names.entry(name_id) {
@@ -665,6 +676,26 @@ impl<'a> RubyOperationBuilder<'a> {
 
     // -- Definition handlers --
 
+    /// Indexes the name of a superclass. In `class Foo < Foo`, the superclass is evaluated before `class` creates the new
+    /// `Foo`, so its name is marked to not resolve to the class being defined
+    fn index_superclass_reference(
+        &mut self,
+        superclass_node: &ruby_prism::Node,
+        class_name_node: Option<&ruby_prism::Node>,
+    ) -> Option<NameId> {
+        if let (ruby_prism::Node::ConstantReadNode { .. }, Some(ruby_prism::Node::ConstantReadNode { .. })) =
+            (superclass_node, class_name_node)
+            && superclass_node.location().as_slice() == class_name_node.unwrap().location().as_slice()
+        {
+            let name = Self::location_to_string(&superclass_node.location());
+            let string_id = self.intern_string(name);
+            let nesting = self.current_lexical_scope_name_id();
+            return Some(self.add_name_before_definition(string_id, nesting));
+        }
+
+        self.index_constant_reference(superclass_node, false)
+    }
+
     fn handle_class_definition(
         &mut self,
         location: &ruby_prism::Location,
@@ -676,7 +707,7 @@ impl<'a> RubyOperationBuilder<'a> {
         let offset = Offset::from_prism_location(location);
         let (comments, flags) = self.find_comments_for(offset.start());
         let superclass_name = superclass_node.as_ref().and_then(|n| {
-            if let Some(id) = self.index_constant_reference(n, false) {
+            if let Some(id) = self.index_superclass_reference(n, name_node) {
                 self.operations
                     .push(Operation::ReferenceConstant(op::ReferenceConstant {
                         name_id: id,
