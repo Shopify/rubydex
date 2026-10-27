@@ -1460,6 +1460,11 @@ Child.const_defined?(:VERSION, false) # => false
 For a constant path, `Foo::X ||= value` uses the qualified lookup, so a top-level `X` does not count and `Foo::X` is
 defined.
 
+`self::Bar` is a qualified lookup on whatever `self` is. Directly in a class, module or singleton class body, `self` is
+that namespace, so `self::Bar` behaves like `Foo::Bar`. Inside a method it depends on the receiver (a subclass calling
+an inherited method sees its own constants), and a block may run with another `self` through `instance_eval` or
+`class_eval`, so those cases cannot be resolved statically.
+
 ## Constant Aliases
 
 Constants can be assigned to reference other constants, creating **aliases**:

@@ -93,6 +93,10 @@ pub struct RubyIndexer<'a> {
     pending_decorator_offset: Option<Offset>,
     /// Start offsets of the program's top level statements, where `self` is `main`
     top_level_statements: HashSet<u32>,
+    /// How many blocks enclose the current node. A block may run with a different `self`
+    block_depth: usize,
+    /// The block depth at each class, module or singleton class body on the nesting stack
+    namespace_block_depths: Vec<usize>,
 }
 
 impl<'a> RubyIndexer<'a> {
@@ -110,6 +114,8 @@ impl<'a> RubyIndexer<'a> {
             visibility_stack: vec![VisibilityModifier::new(Visibility::Private, false, Offset::new(0, 0))],
             pending_decorator_offset: None,
             top_level_statements: HashSet::new(),
+            block_depth: 0,
+            namespace_block_depths: Vec::new(),
         }
     }
 
@@ -370,6 +376,25 @@ impl<'a> RubyIndexer<'a> {
         })
     }
 
+    /// The namespace `self` refers to, when it is known statically: directly in a `class`, `module` or `class << x` body,
+    /// outside of any method or block. Inside a method `self` depends on the receiver, and a block may be evaluated
+    /// with another `self` (`instance_eval`, `class_eval`)
+    fn static_self_name_id(&self) -> Option<NameId> {
+        let Some(Nesting::LexicalScope(id)) = self.nesting_stack.last() else {
+            return None;
+        };
+        if self.namespace_block_depths.last() != Some(&self.block_depth) {
+            return None;
+        }
+
+        match self.local_graph.definitions().get(id)? {
+            Definition::Class(class_def) => Some(*class_def.name_id()),
+            Definition::Module(module_def) => Some(*module_def.name_id()),
+            Definition::SingletonClass(singleton_class_def) => Some(*singleton_class_def.name_id()),
+            _ => None,
+        }
+    }
+
     /// Gets the `NameId` of the current owner (class/module/singleton class), including `Class.new`/`Module.new`.
     /// Used to resolve `self` in singleton method definitions (e.g., `def self.bar`).
     ///
@@ -416,23 +441,30 @@ impl<'a> RubyIndexer<'a> {
                 let constant = node.as_constant_path_node().unwrap();
 
                 if let Some(parent) = constant.parent() {
-                    // Ignore parent scopes that are not constants, like `foo::Bar`
-                    match parent {
-                        ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => {}
-                        _ => {
-                            self.local_graph.add_diagnostic(
-                                Rule::DynamicConstantReference,
-                                Offset::from_prism_location(&parent.location()),
-                                "Dynamic constant reference".to_string(),
-                            );
+                    if parent.as_self_node().is_some()
+                        && let Some(self_name_id) = self.static_self_name_id()
+                    {
+                        // `self::Bar` directly in a class body is `Foo::Bar`
+                        parent_scope_id = ParentScope::Some(self_name_id);
+                    } else {
+                        // Ignore parent scopes that are not constants, like `foo::Bar`
+                        match parent {
+                            ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => {}
+                            _ => {
+                                self.local_graph.add_diagnostic(
+                                    Rule::DynamicConstantReference,
+                                    Offset::from_prism_location(&parent.location()),
+                                    "Dynamic constant reference".to_string(),
+                                );
 
-                            return None;
+                                return None;
+                            }
                         }
-                    }
 
-                    parent_scope_id = self
-                        .index_constant_reference(&parent, true)
-                        .map_or(ParentScope::None, ParentScope::Some);
+                        parent_scope_id = self
+                            .index_constant_reference(&parent, true)
+                            .map_or(ParentScope::None, ParentScope::Some);
+                    }
                 } else {
                     parent_scope_id = ParentScope::TopLevel;
                 }
@@ -727,10 +759,12 @@ impl<'a> RubyIndexer<'a> {
 
             if let Some(body) = body_node {
                 self.nesting_stack.push(nesting_type(definition_id));
+                self.namespace_block_depths.push(self.block_depth);
                 self.visibility_stack
                     .push(VisibilityModifier::new(Visibility::Public, false, offset));
                 self.visit(&body);
                 self.visibility_stack.pop();
+                self.namespace_block_depths.pop();
                 self.nesting_stack.pop();
             }
         }
@@ -787,10 +821,12 @@ impl<'a> RubyIndexer<'a> {
 
             if let Some(body) = body_node {
                 self.nesting_stack.push(nesting_type(definition_id));
+                self.namespace_block_depths.push(self.block_depth);
                 self.visibility_stack
                     .push(VisibilityModifier::new(Visibility::Public, false, offset));
                 self.visit(&body);
                 self.visibility_stack.pop();
+                self.namespace_block_depths.pop();
                 self.nesting_stack.pop();
             }
         }
@@ -1617,6 +1653,12 @@ impl CommentGroup {
 }
 
 impl Visit<'_> for RubyIndexer<'_> {
+    fn visit_block_node(&mut self, node: &ruby_prism::BlockNode) {
+        self.block_depth += 1;
+        ruby_prism::visit_block_node(self, node);
+        self.block_depth -= 1;
+    }
+
     fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'_>) {
         self.handle_class_definition(
             &node.location(),
@@ -1718,10 +1760,12 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         if let Some(body) = node.body() {
             self.nesting_stack.push(Nesting::LexicalScope(definition_id));
+            self.namespace_block_depths.push(self.block_depth);
             self.visibility_stack
                 .push(VisibilityModifier::new(Visibility::Public, false, offset));
             self.visit(&body);
             self.visibility_stack.pop();
+            self.namespace_block_depths.pop();
             self.nesting_stack.pop();
         }
     }

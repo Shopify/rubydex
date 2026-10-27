@@ -298,6 +298,54 @@ mod constant_resolution_tests {
         assert_declaration_exists!(context, "Foo::TOP");
         assert_declaration_exists!(context, "Foo::NEW");
     }
+
+    #[test]
+    fn self_constant_path_in_a_namespace_body() {
+        let mut context = graph_test();
+        // Directly in a class, module or singleton class body, `self` is that namespace. In a method or a block it
+        // depends on the receiver, so those stay dynamic
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Parent
+              INHERITED = 1
+            end
+
+            class Foo < Parent
+              OWN = 1
+
+              self::OWN
+              self::INHERITED
+
+              class << self
+                SINGLETON = 1
+                self::SINGLETON
+              end
+
+              def bar
+                self::OWN
+              end
+
+              each do
+                self::OWN
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "DynamicConstantReference: Dynamic constant reference (17:5-17:9)",
+                "DynamicConstantReference: Dynamic constant reference (21:5-21:9)",
+            ],
+            &[Rule::ParseWarning]
+        );
+
+        assert_constant_reference_to!(context, "Foo::OWN", "file:///foo.rb:8:9-8:12");
+        assert_constant_reference_to!(context, "Parent::INHERITED", "file:///foo.rb:9:9-9:18");
+        assert_constant_reference_to!(context, "Foo::<Foo>::SINGLETON", "file:///foo.rb:13:11-13:20");
+    }
 }
 
 mod constant_alias_tests {
