@@ -1126,6 +1126,48 @@ mod constant_alias_tests {
         assert_declaration_exists!(context, "Foo#initialize()");
         assert_declaration_exists!(context, "Foo#new_bar()");
     }
+
+    #[test]
+    fn reassigned_alias_uses_the_last_assignment() {
+        let mut context = graph_test();
+        // Reassigning a constant replaces its value, and `||=` only assigns when nothing was assigned before
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A
+              C = 1
+            end
+
+            module B
+              C = 2
+            end
+
+            X = A
+            X = B
+            X::C
+
+            Y ||= A
+            Y = B
+            Y::C
+
+            Z = A
+            Z ||= B
+            Z::C
+
+            module X
+              NEW = 1
+            end
+            B::NEW
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_to!(context, "B::C", "file:///foo.rb:11:4-11:5");
+        assert_constant_reference_to!(context, "B::C", "file:///foo.rb:15:4-15:5");
+        assert_constant_reference_to!(context, "A::C", "file:///foo.rb:19:4-19:5");
+        assert_constant_reference_to!(context, "B::NEW", "file:///foo.rb:24:4-24:7");
+    }
 }
 
 mod superclass_tests {

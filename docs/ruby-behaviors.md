@@ -1473,6 +1473,21 @@ ALIAS = Foo
 ALIAS::CONST  # Resolves to Foo::CONST (123)
 ```
 
+### Reassigned Aliases
+
+Reassigning a constant replaces its value (with an "already initialized constant" warning), so the last plain
+assignment wins. A `||=` assignment only takes effect when nothing was assigned before it:
+
+```ruby
+X = A
+X = B
+X::C # => B::C
+
+Z = A
+Z ||= B
+Z::C # => A::C
+```
+
 ### Chained Aliases
 
 Aliases can reference other aliases, forming chains:
