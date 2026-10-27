@@ -262,6 +262,11 @@ mod constant_resolution_tests {
             module Fresh
               FRESH ||= 1
             end
+
+            module Early
+              LATER ||= 1
+            end
+            LATER = 2
             "
         });
         context.resolve();
@@ -272,6 +277,8 @@ mod constant_resolution_tests {
         assert_declaration_does_not_exist!(context, "Child::WIDTH");
         assert_declaration_does_not_exist!(context, "Bar::TOP");
         assert_declaration_exists!(context, "Fresh::FRESH");
+        // The top level LATER is only defined after the `||=` runs
+        assert_declaration_exists!(context, "Early::LATER");
 
         assert_constant_reference_to!(context, "Parent::VERSION", "file:///foo.rb:7:3-7:10");
         assert_constant_reference_to!(context, "Parent::VERSION", "file:///foo.rb:11:8-11:15");

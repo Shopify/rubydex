@@ -364,6 +364,19 @@ impl<'a> Resolver<'a> {
             return None;
         }
 
+        // Ruby runs `defined?` when the `||=` executes. If every definition of the existing constant comes later in
+        // the same file, it doesn't exist yet at that point and the `||=` does define a new constant. Definitions in
+        // other files may have been loaded first
+        let definition = self.graph.definitions().get(&id).unwrap();
+        let (uri_id, start) = (*definition.uri_id(), definition.offset().start());
+        let defined_before = existing.definitions().iter().any(|existing_definition_id| {
+            let existing_definition = self.graph.definitions().get(existing_definition_id).unwrap();
+            *existing_definition.uri_id() != uri_id || existing_definition.offset().start() < start
+        });
+        if !defined_before {
+            return None;
+        }
+
         let existing_name = existing.name().to_string();
         let existing_owner_id = *existing.owner_id();
         // `add_declaration` deduplicates by fully qualified name, so this appends the definition to the existing
