@@ -2541,6 +2541,29 @@ mod object_ancestors_tests {
 
         assert_constant_reference_to!(context, "Kernel::FOUND_ME", "file:///foo.rb:3:3-3:11");
     }
+
+    #[test]
+    fn modules_included_into_reopened_object_come_before_kernel() {
+        let mut context = graph_test();
+        // The VM includes Kernel into Object before any code runs, so a later `include` lands in front of it
+        context.index_uri("file:///foo.rb", {
+            r"
+            module M; end
+            module N; end
+
+            class Object
+              include M
+            end
+
+            include N
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Object", ["Object", "N", "M", "Kernel", "BasicObject"]);
+    }
 }
 
 mod singleton_ancestors_tests {

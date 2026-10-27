@@ -2,7 +2,7 @@ use std::collections::{HashSet, VecDeque, hash_map::Entry};
 
 use crate::diagnostic::{Diagnostic, Rule};
 use crate::model::{
-    built_in::{BASIC_OBJECT_ID, CLASS_ID, KERNEL_ID, MODULE_ID, OBJECT_ID},
+    built_in::{BASIC_OBJECT_ID, BUILT_IN_URI_ID, CLASS_ID, KERNEL_ID, MODULE_ID, OBJECT_ID},
     declaration::{
         Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration, ConstantDeclaration,
         Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
@@ -1225,7 +1225,15 @@ impl<'a> Resolver<'a> {
         // Collect prepends and includes for the current declaration, noting if any extends exist
         let mut has_extends = false;
 
-        for definition_id in declaration.definitions() {
+        // Built-in definitions stand for what the VM sets up before any code runs (e.g. `Object` including `Kernel`), so
+        // their mixins are applied first. Otherwise reopening `Object` to include a module would be applied before the
+        // built-in `include Kernel`, giving `[Object, Kernel, M]` instead of Ruby's `[Object, M, Kernel]`
+        let (built_in_definitions, definitions): (Vec<DefinitionId>, Vec<DefinitionId>) =
+            declaration.definitions().iter().partition(|definition_id| {
+                *self.graph.definitions().get(definition_id).unwrap().uri_id() == *BUILT_IN_URI_ID
+            });
+
+        for definition_id in built_in_definitions.iter().chain(&definitions) {
             for mixin in self.mixins_of(*definition_id) {
                 match mixin {
                     Mixin::Prepend(_) | Mixin::Include(_) => mixins.push(mixin.clone()),
