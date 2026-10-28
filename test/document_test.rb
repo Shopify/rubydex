@@ -191,6 +191,21 @@ class DocumentTest < Minitest::Test
     end
   end
 
+  def test_trailing_inline_comment_is_not_attached_to_the_next_definition
+    with_context do |context|
+      context.write!("file1.rb", "def first; end # belongs to first\ndef second; end\n")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      document = graph.documents.find { |doc| doc.uri == context.uri_to("file1.rb") }
+      second = document.definitions.find { |definition| definition.name == "second()" }
+
+      assert_empty(second.comments)
+      assert_equal([["# belongs to first"]], document.comments.map { |group| group.map(&:string) })
+    end
+  end
+
   def test_unattached_comments_preserve_nul_bytes
     with_context do |context|
       context.write!("file1.rb", "# unattached before\0after\n")

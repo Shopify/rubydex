@@ -206,6 +206,17 @@ impl<'a> RubyIndexer<'a> {
         };
 
         let group = &self.comments[idx];
+        let first_comment_offset = group.comments[0].offset().start() as usize;
+        let comment_line_start = self.source[..first_comment_offset]
+            .rfind('\n')
+            .map_or(0, |line_break| line_break + 1);
+        if !self.source.as_bytes()[comment_line_start..first_comment_offset]
+            .iter()
+            .all(|&b| b.is_ascii_whitespace())
+        {
+            return (Box::default(), DefinitionFlags::empty());
+        }
+
         let between = &self.source.as_bytes()[group.end_offset..offset_usize];
         if !between.iter().all(|&b| b.is_ascii_whitespace()) {
             return (Box::default(), DefinitionFlags::empty());

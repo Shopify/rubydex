@@ -151,6 +151,22 @@ fn keeps_unattached_comment_groups_on_document() {
     assert!(attached_comments.contains(&"# comment on a module_function definition"));
 }
 
+#[test]
+fn keeps_trailing_inline_comments_unattached_to_the_next_definition() {
+    let context = index_source("def first; end # belongs to first\ndef second; end\n");
+
+    let unattached_comments = context
+        .graph()
+        .document()
+        .comments()
+        .iter()
+        .flat_map(crate::model::comment::CommentGroup::comments)
+        .map(crate::model::comment::Comment::string)
+        .collect::<Vec<_>>();
+
+    assert_eq!(unattached_comments, vec!["# belongs to first"]);
+}
+
 mod constant_tests {
     use super::*;
 
