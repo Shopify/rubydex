@@ -717,6 +717,31 @@ impl Graph {
         std::mem::take(&mut self.pending_work)
     }
 
+    /// Invalidates a declaration's descendants, returning the work created by that invalidation.
+    ///
+    /// Unlike graph updates, callers may need to process this work in the current resolution cycle.
+    pub(crate) fn invalidate_descendants_and_collect_work(&mut self, declaration_id: DeclarationId) -> Vec<Unit> {
+        let descendants: Vec<_> = self
+            .declarations
+            .get(&declaration_id)
+            .and_then(Declaration::as_namespace)
+            .map(|namespace| {
+                namespace
+                    .descendants()
+                    .iter()
+                    .copied()
+                    .filter(|descendant_id| *descendant_id != declaration_id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let pending_work_len = self.pending_work.len();
+        self.invalidate_graph(
+            descendants.into_iter().map(InvalidationItem::Declaration).collect(),
+            IdentityHashMap::default(),
+        );
+        self.pending_work.split_off(pending_work_len)
+    }
+
     pub(crate) fn push_work(&mut self, unit: Unit) {
         self.pending_work.push(unit);
     }

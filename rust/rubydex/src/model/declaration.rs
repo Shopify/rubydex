@@ -94,6 +94,9 @@ macro_rules! namespace_declaration {
                 match other {
                     Declaration::Namespace(namespace) => {
                         self.namespace_store.members.extend(namespace.members());
+                        self.namespace_store
+                            .descendants
+                            .extend(namespace.descendants().iter().copied());
                         self.core.references.extend(namespace.references());
                     }
                     Declaration::Constant(it) | Declaration::ConstantAlias(it) => {
