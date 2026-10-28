@@ -311,6 +311,13 @@ class ReferencesTest < Minitest::Test
     end
   end
 
+  def test_method_reference_name_with_nul_byte
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo; alias_method :x, :\"t\0s\"; end\n", "ruby")
+
+    assert_equal(["t\0s()"], graph.method_references.map(&:name))
+  end
+
   def test_method_reference_location_raises_when_source_document_is_deleted
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)

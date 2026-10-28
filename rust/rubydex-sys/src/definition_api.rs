@@ -4,6 +4,7 @@ use crate::declaration_api::CDeclaration;
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
 use crate::reference_api::CConstantReference;
+use crate::utils::OwnedString;
 use libc::c_char;
 use rubydex::model::definitions::{Definition, Mixin};
 use rubydex::model::graph::Graph;
@@ -84,30 +85,26 @@ pub unsafe extern "C" fn rdx_definition_kind(pointer: GraphPointer, definition_i
     })
 }
 
-/// Returns the UTF-8 unqualified name string for a definition id.
-/// Caller must free with `free_c_string`.
+/// Returns the UTF-8 unqualified name string for a definition id, or a null string if the definition cannot be found.
+/// Caller must free with `free_owned_string`.
 ///
 /// # Safety
 ///
 /// Assumes pointer is valid.
-///
-/// # Panics
-///
-/// This function will panic if the definition cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_definition_name(pointer: GraphPointer, definition_id: u64) -> *const c_char {
+pub unsafe extern "C" fn rdx_definition_name(pointer: GraphPointer, definition_id: u64) -> OwnedString {
     with_graph(pointer, |graph| {
         let def_id = DefinitionId::new(definition_id);
         if let Some(defn) = graph.definitions().get(&def_id) {
             let string_id = graph.definition_string_id(defn);
 
             if let Some(name) = graph.strings().get(&string_id) {
-                CString::new(name.as_str()).unwrap().into_raw().cast_const()
+                OwnedString::new(name.as_str())
             } else {
-                ptr::null()
+                OwnedString::null()
             }
         } else {
-            ptr::null()
+            OwnedString::null()
         }
     })
 }
@@ -212,7 +209,7 @@ pub unsafe extern "C" fn rdx_definitions_iter_free(iter: *mut DefinitionsIter) {
 /// C-compatible struct representing a single comment with its string and location
 #[repr(C)]
 pub struct CommentEntry {
-    pub string: *const c_char,
+    pub string: OwnedString,
     pub location: *mut Location,
 }
 
@@ -248,7 +245,7 @@ pub unsafe extern "C" fn rdx_definition_comments(pointer: GraphPointer, definiti
             .comments()
             .iter()
             .map(|c| CommentEntry {
-                string: CString::new(c.string()).unwrap().into_raw().cast_const(),
+                string: OwnedString::new(c.string()),
                 location: create_location_for_uri_and_offset(graph, document, c.offset()),
             })
             .collect::<Vec<CommentEntry>>()
@@ -282,17 +279,13 @@ pub unsafe extern "C" fn rdx_definition_comments_free(ptr: *mut CommentArray) {
         let mut boxed_slice: Box<[CommentEntry]> = unsafe { Box::from_raw(slice_ptr) };
 
         for item in &mut boxed_slice {
-            if !item.string.is_null() {
-                // Free the CString allocated for the comment string
-                let _ = unsafe { CString::from_raw(item.string.cast_mut()) };
-            }
             if !item.location.is_null() {
                 unsafe { crate::location_api::rdx_location_free(item.location) };
                 item.location = ptr::null_mut();
             }
         }
 
-        // boxed_slice is dropped here, freeing the items buffer
+        // boxed_slice is dropped here, freeing the items buffer and each item's string
     }
     // arr is dropped here
 }

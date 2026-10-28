@@ -5,11 +5,13 @@ use crate::declaration_api::CDeclaration;
 use crate::definition_api::map_definition_to_kind;
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::utils;
+use crate::utils::OwnedString;
 use libc::{c_char, c_void};
 use rubydex::model::graph::Graph;
 use rubydex::query::cypher::schema::NodeRef;
 use rubydex::query::cypher::{self, CypherValue, OutputFormat};
 use std::ffi::CString;
+use std::mem::ManuallyDrop;
 use std::ptr;
 
 /// Which layer of the Cypher pipeline rejected a call, so callers can raise a matching error class.
@@ -201,14 +203,13 @@ pub struct CMap {
 /// Payload of a `CCell`. The active field is selected by the cell's `tag`; reading any other field
 /// is undefined. `Null` carries no payload.
 #[repr(C)]
-#[derive(Clone, Copy)]
 pub union CCellPayload {
     /// `Bool`.
     pub bool_val: bool,
     /// `Int`.
     pub int_val: i64,
-    /// `Str`: owned C string (freed by `rdx_rows_iter_free`).
-    pub str_val: *const c_char,
+    /// `Str`: owned string (freed by `rdx_rows_iter_free`). A union never drops its fields, so `free_cell` drops it.
+    pub str_val: ManuallyDrop<OwnedString>,
     /// `Node`.
     pub node: CNode,
     /// `List`.
@@ -306,7 +307,7 @@ fn build_cell(graph: &Graph, value: &CypherValue) -> Result<CCell, String> {
         CypherValue::Str(s) => Ok(CCell::new(
             CCellTag::Str,
             CCellPayload {
-                str_val: utils::cstring_raw(s),
+                str_val: ManuallyDrop::new(OwnedString::new(s)),
             },
         )),
         CypherValue::List(items) => {
@@ -715,10 +716,9 @@ unsafe fn free_cell(cell: &CCell) {
     match cell.tag {
         // SAFETY: the tag selects the active union field.
         CCellTag::Str => {
-            let str_val = unsafe { cell.payload.str_val };
-            if !str_val.is_null() {
-                let _ = unsafe { CString::from_raw(str_val.cast_mut()) };
-            }
+            // The cell is not used after this, so moving the string out of it is sound
+            let string = unsafe { ptr::read(&raw const cell.payload.str_val) };
+            drop(ManuallyDrop::into_inner(string));
         }
         // SAFETY: the tag selects the active union field.
         CCellTag::List => {

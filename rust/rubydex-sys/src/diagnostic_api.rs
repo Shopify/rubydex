@@ -2,9 +2,10 @@
 
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
+use crate::utils::OwnedString;
 use libc::c_char;
 use rubydex::diagnostic::{Rule, Severity};
-use std::{ffi::CString, mem, ptr};
+use std::{mem, ptr};
 
 /// C-compatible enum representing diagnostic severity levels.
 #[repr(C)]
@@ -49,7 +50,7 @@ impl From<Rule> for CRule {
 #[repr(C)]
 pub struct DiagnosticEntry {
     pub rule: CRule,
-    pub message: *const c_char,
+    pub message: OwnedString,
     pub location: *mut Location,
 }
 
@@ -91,7 +92,7 @@ pub unsafe extern "C" fn rdx_graph_diagnostics(pointer: GraphPointer) -> *mut Di
 
                 DiagnosticEntry {
                     rule: CRule::from(*diagnostic.rule()),
-                    message: CString::new(diagnostic.message()).unwrap().into_raw().cast_const(),
+                    message: OwnedString::new(diagnostic.message()),
                     location,
                 }
             })
@@ -119,15 +120,12 @@ pub unsafe extern "C" fn rdx_diagnostics_free(ptr: *mut DiagnosticArray) {
         let mut boxed_slice: Box<[DiagnosticEntry]> = unsafe { Box::from_raw(slice_ptr) };
 
         for entry in &mut *boxed_slice {
-            if !entry.message.is_null() {
-                let _ = unsafe { CString::from_raw(entry.message.cast_mut()) };
-            }
             if !entry.location.is_null() {
                 unsafe { crate::location_api::rdx_location_free(entry.location) };
                 entry.location = ptr::null_mut();
             }
         }
-        // boxed_slice drops here, releasing the buffer
+        // boxed_slice drops here, releasing the buffer and each entry's message
     }
     // array drops here
 }
