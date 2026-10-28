@@ -2,7 +2,7 @@
 name = "rubydex-sys"
 version.workspace = true
 edition = "2024"
-rust-version = "1.89.0"
+rust-version.workspace = true
 license = "MIT"
 description = "C FFI bindings for the Rubydex Ruby code indexing engine."
 homepage = "https://github.com/Shopify/rubydex"

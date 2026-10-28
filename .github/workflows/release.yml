@@ -60,6 +60,10 @@ jobs:
     steps:
       - name: "Checkout code"
         uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      - name: "Setup Rust"
+        run: |
+          rustup update --no-self-update stable
+          rustup default stable
       - name: "Setup Ruby"
         uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
@@ -88,6 +92,10 @@ jobs:
     steps:
       - name: "Checkout code"
         uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+      - name: "Setup Rust"
+        run: |
+          rustup update --no-self-update stable
+          rustup default stable
       - name: "Setup Ruby"
         uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:

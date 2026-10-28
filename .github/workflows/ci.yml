@@ -69,6 +69,11 @@ jobs:
         with:
           submodules: "recursive"
 
+      - name: Install Rust tools
+        run: |
+          rustup update --no-self-update stable
+          rustup default stable
+
       - name: Set up Ruby
         uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
