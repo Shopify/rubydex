@@ -169,7 +169,39 @@ impl<'a> Resolver<'a> {
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
     /// the Ruby API
+    ///
+    /// # Panics
+    ///
+    /// Can panic if there's inconsistent data in the graph
     pub fn resolve_constant(&mut self, name_id: NameId) -> Option<DeclarationId> {
+        let name = match self.graph.names().get(&name_id).unwrap() {
+            NameRef::Resolved(resolved) => return Some(*resolved.declaration_id()),
+            NameRef::Unresolved(name) => name,
+        };
+        let parent_scope = name.parent_scope().as_ref().copied();
+        let nesting = *name.nesting();
+
+        // If the constant doesn't actually exist in the codebase, then the `NameId` of the parent scope and nesting may
+        // not have been resolved and we need to manually trigger it here. If it was already resolved, this is a no-op.
+        // For example:
+        //
+        // ```ruby
+        // module Foo
+        //   module Bar
+        //   end
+        // end
+        // ```
+        //
+        // The name `Foo::Bar` does not exist in this code snippet, so it doesn't exist in the graph and isnt' resolved,
+        // but it's a valid reference.
+        if let Some(nesting_id) = nesting {
+            self.resolve_constant(nesting_id);
+        }
+
+        if let Some(parent_scope_id) = parent_scope {
+            self.resolve_constant(parent_scope_id)?;
+        }
+
         match self.resolve_constant_internal(name_id) {
             Outcome::Resolved(id) => Some(id),
             Outcome::Unresolved | Outcome::Retry { .. } => None,
