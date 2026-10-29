@@ -24,7 +24,7 @@ jobs:
           rustup update --no-self-update stable
           rustup default stable
       - name: "Setup Ruby"
-        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
+        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         with:
           bundler-cache: true
       - name: Check versions are in sync
@@ -65,7 +65,7 @@ jobs:
           rustup update --no-self-update stable
           rustup default stable
       - name: "Setup Ruby"
-        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
+        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         with:
           ruby-version: "3.2.9"
           bundler-cache: true
@@ -97,7 +97,7 @@ jobs:
           rustup update --no-self-update stable
           rustup default stable
       - name: "Setup Ruby"
-        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
+        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         with:
           ruby-version: "${{ matrix.rubies }}"
           bundler-cache: true
@@ -120,7 +120,7 @@ jobs:
     runs-on: "${{ matrix.os }}"
     steps:
       - name: "Setup Ruby"
-        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
+        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         with:
           ruby-version: "4.0.0"
       - name: "Run cibuildgem"
@@ -140,7 +140,7 @@ jobs:
     runs-on: "ubuntu-latest"
     steps:
       - name: "Setup Ruby"
-        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
+        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         with:
           ruby-version: "4.0.0"
       - name: "Update RubyGems"
