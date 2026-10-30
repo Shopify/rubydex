@@ -1999,6 +1999,61 @@ mod visibility_tests {
     }
 
     #[test]
+    fn index_method_visibility_with_self_receiver() {
+        let context = index_source(
+            "
+            class Foo
+              def foo; end
+
+              self.private :foo
+
+              self.protected
+
+              def bar; end
+            end
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:17-4:20", MethodVisibility, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "8:3-8:15", Method, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+            assert_eq!(def.visibility(), &Visibility::Protected);
+        });
+    }
+
+    #[test]
+    fn index_module_function_with_self_receiver() {
+        let context = index_source(
+            "
+            module Foo
+              def foo; end
+
+              self.module_function :foo
+            end
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        let defs = context.all_definitions_at("4:25-4:28");
+        assert_eq!(defs.len(), 2, "expected two MethodVisibility defs");
+
+        for def in defs {
+            let Definition::MethodVisibility(method_vis) = def else {
+                panic!("expected MethodVisibility, got {:?}", def.kind());
+            };
+            assert_def_str_eq!(&context, method_vis.as_ref(), "foo()");
+            assert_eq!(method_vis.visibility(), &Visibility::ModuleFunction);
+        }
+    }
+
+    #[test]
     fn index_retroactive_method_visibility_dynamic_only_diagnostic() {
         let context = index_source(
             "

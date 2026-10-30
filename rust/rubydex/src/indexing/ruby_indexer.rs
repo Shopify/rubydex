@@ -2117,7 +2117,8 @@ impl Visit<'_> for RubyIndexer<'_> {
                 }
             }
             "private" | "protected" | "public" | "module_function" => {
-                if node.receiver().is_some() {
+                // `self.private` is allowed since Ruby 2.7, so only reject receivers other than `self`
+                if node.receiver().is_some_and(|r| r.as_self_node().is_none()) {
                     let offset = Offset::from_prism_location(&node.location());
                     self.local_graph.add_diagnostic(
                         Rule::InvalidMethodVisibility,
