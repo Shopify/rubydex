@@ -564,7 +564,8 @@ impl Graph {
     /// Returns all target declaration IDs for a constant alias.
     ///
     /// A constant alias can have multiple definitions (e.g., conditional assignment in different files),
-    /// each potentially pointing to a different target. This method collects all resolved targets.
+    /// each potentially pointing to a different target. This method collects all resolved targets, primary first: the
+    /// last plain assignment, then earlier ones, then `||=` assignments in order.
     ///
     /// Returns `None` if the declaration doesn't exist or is not a constant alias.
     /// Returns `Some(vec![])` if no targets have been resolved yet.
@@ -576,22 +577,31 @@ impl Graph {
             return None;
         };
 
-        let mut targets = Vec::new();
+        // Reassigning a constant replaces its value, so the last plain assignment is the primary target. A conditional
+        // assignment (`X ||= A`) only takes effect when nothing was assigned before it, so those come last
+        let mut assigned = Vec::new();
+        let mut conditional = Vec::new();
         for definition_id in declaration.definitions() {
             let Some(Definition::ConstantAlias(alias_def)) = self.definitions.get(definition_id) else {
                 continue;
             };
 
             let target_name_id = alias_def.target_name_id();
-            let Some(name_ref) = self.names.get(target_name_id) else {
+            let Some(NameRef::Resolved(resolved)) = self.names.get(target_name_id) else {
                 continue;
             };
 
-            if let NameRef::Resolved(resolved) = name_ref {
-                let target_id = *resolved.declaration_id();
-                if !targets.contains(&target_id) {
-                    targets.push(target_id);
-                }
+            if alias_def.flags().is_conditional() {
+                conditional.push(*resolved.declaration_id());
+            } else {
+                assigned.push(*resolved.declaration_id());
+            }
+        }
+
+        let mut targets = Vec::new();
+        for target_id in assigned.into_iter().rev().chain(conditional) {
+            if !targets.contains(&target_id) {
+                targets.push(target_id);
             }
         }
 
