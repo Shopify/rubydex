@@ -191,6 +191,37 @@ class DocumentTest < Minitest::Test
     end
   end
 
+  def test_comments_is_empty_for_an_empty_document
+    with_context do |context|
+      context.write!("file1.rb", "")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      document = graph.documents.find { |doc| doc.uri == context.uri_to("file1.rb") }
+      assert_empty(document.comments)
+    end
+  end
+
+  def test_unattached_comments_can_be_read_repeatedly
+    with_context do |context|
+      context.write!("file1.rb", "# unattached\n")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      document = graph.documents.find { |doc| doc.uri == context.uri_to("file1.rb") }
+      first = document.comments
+      GC.start
+      second = document.comments
+
+      assert_equal(["# unattached"], first.flatten.map(&:string))
+      assert_equal(["# unattached"], second.flatten.map(&:string))
+      assert_equal(1, first.first.first.location.to_display.start_line)
+      assert_equal(1, second.first.first.location.to_display.start_line)
+    end
+  end
+
   def test_trailing_inline_comment_is_not_attached_to_the_next_definition
     with_context do |context|
       context.write!("file1.rb", "def first; end # belongs to first\ndef second; end\n")
@@ -215,6 +246,32 @@ class DocumentTest < Minitest::Test
 
       document = graph.documents.find { |doc| doc.uri == context.uri_to("file1.rb") }
       assert_equal(["# unattached before\0after"], document.comments.flatten.map(&:string))
+    end
+  end
+
+  def test_unattached_comment_memory_is_freed_when_ruby_construction_raises
+    with_context do |context|
+      context.write!("file1.rb", "# unattached\n")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      document = graph.documents.find { |doc| doc.uri == context.uri_to("file1.rb") }
+
+      comment_class = Rubydex::Comment
+      original_initialize = comment_class.instance_method(:initialize)
+      original_verbose = $VERBOSE
+      begin
+        $VERBOSE = nil
+        comment_class.define_method(:initialize) { |**_kwargs| raise "comment construction failed" }
+        $VERBOSE = original_verbose
+
+        error = assert_raises(RuntimeError) { document.comments }
+        assert_equal("comment construction failed", error.message)
+      ensure
+        $VERBOSE = nil
+        comment_class.define_method(:initialize, original_initialize) if original_initialize
+        $VERBOSE = original_verbose
+      end
     end
   end
 end

@@ -27,12 +27,22 @@ static VALUE rdxr_document_uri(VALUE self) {
     return rdxi_owned_c_string_to_ruby(uri);
 }
 
-static VALUE document_comments_build(VALUE args) {
-    VALUE self = rb_ary_entry(args, 0);
-    struct CommentGroupsArray *groups =
-        (struct CommentGroupsArray *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
-    (void)self;
+struct DocumentCommentsContext {
+    VALUE self;
+    void *graph;
+    uint64_t document_id;
+    struct CommentGroupsArray *groups;
+};
 
+static VALUE document_comments_build(VALUE context_value) {
+    struct DocumentCommentsContext *context =
+        (struct DocumentCommentsContext *)(uintptr_t)context_value;
+    context->groups = rdx_document_comments(context->graph, context->document_id);
+    if (context->groups == NULL) {
+        rb_raise(rb_eRuntimeError, "Document must exist for a valid id");
+    }
+
+    struct CommentGroupsArray *groups = context->groups;
     VALUE result = rb_ary_new_capa((long)groups->len);
     for (size_t group_index = 0; group_index < groups->len; group_index++) {
         struct DocumentCommentArray group = groups->items[group_index];
@@ -56,10 +66,10 @@ static VALUE document_comments_build(VALUE args) {
     return result;
 }
 
-static VALUE document_comments_ensure(VALUE args) {
-    struct CommentGroupsArray *groups =
-        (struct CommentGroupsArray *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
-    rdx_document_comments_free(groups);
+static VALUE document_comments_ensure(VALUE context_value) {
+    struct DocumentCommentsContext *context =
+        (struct DocumentCommentsContext *)(uintptr_t)context_value;
+    rdx_document_comments_free(context->groups);
     return Qnil;
 }
 
@@ -73,13 +83,12 @@ static VALUE rdxr_document_comments(VALUE self) {
     HandleData *data;
     void *graph = rdxi_graph_from_handle(self, &data);
 
-    struct CommentGroupsArray *groups = rdx_document_comments(graph, data->id);
-    if (groups == NULL) {
-        rb_raise(rb_eRuntimeError, "Document must exist for a valid id");
-    }
-
-    VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)groups));
-    return rb_ensure(document_comments_build, args, document_comments_ensure, args);
+    struct DocumentCommentsContext context = {self, graph, data->id, NULL};
+    return rb_ensure(
+        document_comments_build,
+        (VALUE)(uintptr_t)&context,
+        document_comments_ensure,
+        (VALUE)(uintptr_t)&context);
 }
 
 // Body function for rb_ensure in Document#definitions
