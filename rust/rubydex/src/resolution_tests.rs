@@ -3807,6 +3807,30 @@ mod todo_tests {
     }
 
     #[test]
+    fn constant_receiver_method_is_rehomed_when_lexical_lookup_changes() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.index_uri("file:///bar.rb", "module Bar; class Qux; def Foo.baz; end; end; end");
+        context.resolve();
+
+        assert_members_eq!(context, "Foo::<Foo>", ["baz()"]);
+
+        context.index_uri("file:///bar_foo.rb", "module Bar; module Foo; end; end");
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#baz()");
+        assert_members_eq!(context, "Foo::<Foo>", [] as [&str; 0]);
+        assert_members_eq!(context, "Bar::Foo::<Foo>", ["baz()"]);
+
+        context.delete_uri("file:///bar_foo.rb");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>#baz()");
+        assert_members_eq!(context, "Foo::<Foo>", ["baz()"]);
+        assert_declaration_does_not_exist!(context, "Bar::Foo::<Foo>#baz()");
+    }
+
+    #[test]
     fn promoted_to_real_namespace() {
         let mut context = graph_test();
         context.index_uri("file:///foo.rb", {

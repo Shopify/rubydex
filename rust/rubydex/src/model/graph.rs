@@ -27,6 +27,8 @@ use crate::{query, stats};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NameDependent {
     Definition(DefinitionId),
+    /// A method whose owner depends on resolving an explicit constant receiver.
+    ConstantReceiverDefinition(DefinitionId),
     Reference(ConstantReferenceId),
     /// This name's `parent_scope` is the key name — structural dependency.
     ChildName(NameId),
@@ -397,8 +399,14 @@ impl Graph {
                 it.str_id(),
             ),
             Definition::Method(it) => {
-                if let Some(Receiver::SelfReceiver(def_id)) = it.receiver() {
-                    return self.find_self_receiver_declaration(*def_id, *it.str_id());
+                match it.receiver() {
+                    Some(Receiver::SelfReceiver(def_id)) => {
+                        return self.find_self_receiver_declaration(*def_id, *it.str_id());
+                    }
+                    Some(Receiver::ConstantReceiver(name_id)) => {
+                        return self.find_constant_receiver_declaration(*name_id, *it.str_id());
+                    }
+                    None => {}
                 }
                 (
                     self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
@@ -478,6 +486,29 @@ impl Graph {
         let singleton_id = self
             .declarations
             .get(owner_decl_id)?
+            .as_namespace()?
+            .singleton_class()?;
+        self.declarations
+            .get(singleton_id)?
+            .as_namespace()?
+            .member(&member_str_id)
+    }
+
+    /// Looks up a singleton method declaration through its explicitly named receiver.
+    fn find_constant_receiver_declaration(&self, name_id: NameId, member_str_id: StringId) -> Option<&DeclarationId> {
+        let receiver_decl_id = *self.name_id_to_declaration_id(name_id)?;
+        let receiver_decl_id = if matches!(
+            self.declarations.get(&receiver_decl_id),
+            Some(Declaration::ConstantAlias(_))
+        ) {
+            self.resolve_alias(&receiver_decl_id)?
+        } else {
+            receiver_decl_id
+        };
+
+        let singleton_id = self
+            .declarations
+            .get(&receiver_decl_id)?
             .as_namespace()?
             .singleton_class()?;
         self.declarations
@@ -1147,6 +1178,9 @@ impl Graph {
                 self.remove_name_dependent(*name_id, NameDependent::Definition(*def_id));
                 self.untrack_name(*name_id);
             }
+            if let Some(name_id) = definition.constant_receiver_name_id() {
+                self.remove_name_dependent(*name_id, NameDependent::ConstantReceiverDefinition(*def_id));
+            }
             self.untrack_definition_strings(&definition);
         }
     }
@@ -1331,6 +1365,14 @@ impl Graph {
         let dependents: Vec<NameDependent> = self.name_dependents.get(&name_id).cloned().unwrap_or_default();
         self.queue_structural_cascade(name_id, queue);
 
+        // Re-home definitions that use this name as an explicit constant receiver before
+        // unresolving it, so their previous declaration can still be found and detached.
+        for dep in &dependents {
+            if let NameDependent::ConstantReceiverDefinition(definition_id) = dep {
+                self.requeue_constant_receiver_definition(*definition_id, queue);
+            }
+        }
+
         if let Some(old_decl_id) = self.unresolve_name(name_id) {
             for dep in &dependents {
                 match dep {
@@ -1355,7 +1397,9 @@ impl Graph {
                             queue.push(InvalidationItem::Declaration(old_decl_id));
                         }
                     }
-                    NameDependent::ChildName(_) | NameDependent::NestedName(_) => {}
+                    NameDependent::ConstantReceiverDefinition(_)
+                    | NameDependent::ChildName(_)
+                    | NameDependent::NestedName(_) => {}
                 }
             }
         }
@@ -1366,6 +1410,13 @@ impl Graph {
     fn unresolve_dependent_references(&mut self, name_id: NameId, queue: &mut Vec<InvalidationItem>) {
         let dependents: Vec<NameDependent> = self.name_dependents.get(&name_id).cloned().unwrap_or_default();
         self.queue_ancestor_triggered_invalidation(name_id, queue);
+
+        // Capture and detach the old owner before the constant reference unresolves its name.
+        for dep in &dependents {
+            if let NameDependent::ConstantReceiverDefinition(definition_id) = dep {
+                self.requeue_constant_receiver_definition(*definition_id, queue);
+            }
+        }
 
         let is_resolved = matches!(self.names.get(&name_id), Some(NameRef::Resolved(_)));
 
@@ -1379,6 +1430,22 @@ impl Graph {
         }
     }
 
+    fn requeue_constant_receiver_definition(&mut self, definition_id: DefinitionId, queue: &mut Vec<InvalidationItem>) {
+        self.pending_work.push(Unit::Definition(definition_id));
+
+        let Some(declaration_id) = self.definition_id_to_declaration_id(definition_id).copied() else {
+            return;
+        };
+        let Some(declaration) = self.declarations.get_mut(&declaration_id) else {
+            return;
+        };
+
+        declaration.remove_definition(&definition_id);
+        if declaration.has_no_definitions() {
+            queue.push(InvalidationItem::Declaration(declaration_id));
+        }
+    }
+
     /// Structural cascade: all dependent names must be unresolved regardless of edge type.
     /// Both `ChildName` and `NestedName` dependents get `UnresolveName`.
     fn queue_structural_cascade(&self, name_id: NameId, queue: &mut Vec<InvalidationItem>) {
@@ -1388,7 +1455,9 @@ impl Graph {
                     NameDependent::ChildName(id) | NameDependent::NestedName(id) => {
                         queue.push(InvalidationItem::Name(*id));
                     }
-                    NameDependent::Reference(_) | NameDependent::Definition(_) => {}
+                    NameDependent::Reference(_)
+                    | NameDependent::Definition(_)
+                    | NameDependent::ConstantReceiverDefinition(_) => {}
                 }
             }
         }
@@ -1406,7 +1475,9 @@ impl Graph {
                     NameDependent::NestedName(id) => {
                         queue.push(InvalidationItem::References(*id));
                     }
-                    NameDependent::Reference(_) | NameDependent::Definition(_) => {}
+                    NameDependent::Reference(_)
+                    | NameDependent::Definition(_)
+                    | NameDependent::ConstantReceiverDefinition(_) => {}
                 }
             }
         }
