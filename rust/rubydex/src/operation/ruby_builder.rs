@@ -10,7 +10,7 @@ use crate::model::comment::Comment;
 use crate::model::definitions::{DefinitionFlags, Parameter, ParameterStruct, Signatures};
 use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
-use crate::model::ids::{NameId, StringId, UriId};
+use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
 use crate::model::name::{Name, NameRef, ParentScope};
 use crate::model::string_ref::StringRef;
 use crate::model::visibility::Visibility;
@@ -155,7 +155,17 @@ impl<'a> RubyOperationBuilder<'a> {
     }
 
     fn add_name(&mut self, str: StringId, parent_scope: ParentScope, nesting: Option<NameId>) -> NameId {
-        let name = Name::new(&self.names, str, parent_scope, nesting);
+        self.add_name_with_context(str, parent_scope, nesting, None)
+    }
+
+    fn add_name_with_context(
+        &mut self,
+        str: StringId,
+        parent_scope: ParentScope,
+        nesting: Option<NameId>,
+        context: Option<DefinitionId>,
+    ) -> NameId {
+        let name = Name::new(&self.names, str, parent_scope, nesting).with_superclass_context(context);
         let name_id = name.id();
 
         match self.names.entry(name_id) {
@@ -389,7 +399,7 @@ impl<'a> RubyOperationBuilder<'a> {
         name_node: Option<&ruby_prism::Node>,
         superclass_node: Option<&ruby_prism::Node>,
         class_offset: &Offset,
-    ) -> (Option<NameId>, Option<NameId>) {
+    ) -> (Option<NameId>, Option<DefinitionId>) {
         let class_name_id = match (name_node, superclass_node) {
             (
                 Some(name_node @ ruby_prism::Node::ConstantReadNode { .. }),
@@ -401,23 +411,8 @@ impl<'a> RubyOperationBuilder<'a> {
             }
             _ => None,
         };
-        let has_prior_definition = class_name_id.is_some_and(|name_id| {
-            self.operations.iter().any(|operation| {
-                matches!(operation, Operation::EnterClass(class) if class.name_id == name_id && class.offset.start() < class_offset.start())
-                    || matches!(operation, Operation::EnterModule(module) if module.name_id == name_id && module.offset.start() < class_offset.start())
-                    || matches!(operation, Operation::DefineConstant(constant) if constant.name_id == name_id && constant.offset.start() < class_offset.start())
-                    || matches!(operation, Operation::AliasConstant(alias) if alias.name_id == name_id && alias.offset.start() < class_offset.start())
-            })
-        });
-        let superclass_nesting = if class_name_id.is_some() && !has_prior_definition {
-            self.current_lexical_scope_name_id()
-                .and_then(|scope_id| self.names.get(&scope_id))
-                .and_then(|scope| *scope.nesting())
-        } else {
-            self.current_lexical_scope_name_id()
-        };
-
-        (class_name_id, superclass_nesting)
+        let context = class_name_id.map(|id| crate::model::ids::namespace_definition_id(self.uri_id, class_offset, id));
+        (class_name_id, context)
     }
 
     fn index_method_reference(&mut self, name: String, location: &ruby_prism::Location, receiver: Option<NameId>) {
@@ -678,10 +673,22 @@ impl<'a> RubyOperationBuilder<'a> {
     ) {
         let offset = Offset::from_prism_location(location);
         let (comments, flags) = self.find_comments_for(offset.start());
-        let (namesake_class_name_id, superclass_nesting) =
+        let (namesake_class_name_id, superclass_context) =
             self.namesake_superclass_context(name_node, superclass_node.as_ref(), &offset);
         let superclass_name = superclass_node.as_ref().and_then(|n| {
-            if let Some(id) = self.index_constant_reference_in_nesting(n, false, superclass_nesting) {
+            let name_id = if let Some(context) = superclass_context {
+                let str_id = self.intern_string(Self::location_to_string(&n.location()));
+                self.add_name_with_context(
+                    str_id,
+                    ParentScope::None,
+                    self.current_lexical_scope_name_id(),
+                    Some(context),
+                )
+                .into()
+            } else {
+                self.index_constant_reference(n, false)
+            };
+            if let Some(id) = name_id {
                 self.operations
                     .push(Operation::ReferenceConstant(op::ReferenceConstant {
                         name_id: id,

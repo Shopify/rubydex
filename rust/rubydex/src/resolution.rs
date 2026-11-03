@@ -178,6 +178,13 @@ impl<'a> Resolver<'a> {
 
     /// Handles a unit of work for resolving a constant definition or singleton method
     fn handle_definition_unit(&mut self, unit_id: Unit, id: DefinitionId) {
+        let constant_definition = self.graph.definitions().get(&id).unwrap().name_id().is_some();
+        let newly_attached = constant_definition
+            && !self
+                .graph
+                .definition_id_to_declaration_id(id)
+                .and_then(|declaration_id| self.graph.declarations().get(declaration_id))
+                .is_some_and(|declaration| declaration.definitions().contains(&id));
         let mut needs_linearization = false;
 
         let outcome = match self.graph.definitions().get(&id).unwrap() {
@@ -246,6 +253,9 @@ impl<'a> Resolver<'a> {
                 // We couldn't resolve this name. Emit a diagnostic
             }
             Outcome::Resolved(id) => {
+                if newly_attached {
+                    self.unit_queue.extend(self.graph.invalidate_superclass_bindings(id));
+                }
                 if needs_linearization {
                     self.unit_queue.push_back(Unit::Ancestors(id));
                     self.relinearize_singleton_hierarchy(id);
@@ -1689,7 +1699,7 @@ impl<'a> Resolver<'a> {
                             }
                             Some(Declaration::Namespace(_)) => {
                                 decl_id = Some(id);
-                                result = self.search_ancestors(id, str_id);
+                                result = self.search_ancestors_in_context(id, str_id, name.superclass_context());
                                 break;
                             }
                             _ => {}
@@ -1725,8 +1735,14 @@ impl<'a> Resolver<'a> {
                 }
             );
 
+            // A superclass must not cache Object's fallback while an enclosing mixin
+            // could still supply the namesake constant on a later convergence pass.
+            if name.superclass_context().is_some() && chain_incomplete {
+                return ancestor_outcome;
+            }
+
             if is_module || chain_incomplete {
-                let object_outcome = self.search_ancestors(*OBJECT_ID, str_id);
+                let object_outcome = self.search_ancestors_in_context(*OBJECT_ID, str_id, name.superclass_context());
 
                 match object_outcome {
                     // Found the constant through Object's ancestors.
@@ -1744,11 +1760,20 @@ impl<'a> Resolver<'a> {
         // When there's no nesting, we're working at the top level of a script. The top level is the magic `<main>`
         // object, which is an instance of `Object`. To resolve constants at the top level, we need to search the
         // ancestors of `Object`
-        self.search_ancestors(*OBJECT_ID, str_id)
+        self.search_ancestors_in_context(*OBJECT_ID, str_id, name.superclass_context())
     }
 
     /// Search for a member in a declaration's ancestor chain.
     fn search_ancestors(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
+        self.search_ancestors_in_context(declaration_id, str_id, None)
+    }
+
+    fn search_ancestors_in_context(
+        &mut self,
+        declaration_id: DeclarationId,
+        str_id: StringId,
+        context: Option<DefinitionId>,
+    ) -> Outcome {
         match self.linearize_ancestors(declaration_id) {
             Ancestors::Complete(ids) | Ancestors::Cyclic(ids) => ids
                 .iter()
@@ -1761,6 +1786,7 @@ impl<'a> Resolver<'a> {
                             .as_namespace()
                             .unwrap()
                             .member(&str_id)
+                            .filter(|id| self.visible_in_superclass_context(**id, context))
                             .map(|id| Outcome::Resolved(*id))
                     } else {
                         None
@@ -1788,6 +1814,7 @@ impl<'a> Resolver<'a> {
                                 .as_namespace()
                                 .unwrap()
                                 .member(&str_id)
+                                && self.visible_in_superclass_context(*id, context)
                             {
                                 return Outcome::Resolved(*id);
                             }
@@ -1812,6 +1839,7 @@ impl<'a> Resolver<'a> {
                 if let Some(namespace_id) = self.resolve_to_namespace(declaration_id)
                     && let Some(namespace) = self.graph.declarations().get(&namespace_id).unwrap().as_namespace()
                     && let Some(member) = namespace.member(&str_id)
+                    && self.visible_in_superclass_context(*member, name.superclass_context())
                 {
                     return Outcome::Resolved(*member);
                 }
@@ -1825,6 +1853,29 @@ impl<'a> Resolver<'a> {
         }
 
         Outcome::Unresolved
+    }
+
+    /// A namesake class is not visible while its superclass expression is evaluated.
+    /// Preserve earlier bindings in this source and bindings in other documents; the
+    /// graph does not infer Ruby's runtime load order from document URI ordering.
+    fn visible_in_superclass_context(&self, candidate: DeclarationId, context: Option<DefinitionId>) -> bool {
+        let Some(context_id) = context else {
+            return true;
+        };
+        if self.graph.definition_id_to_declaration_id(context_id) != Some(&candidate) {
+            return true;
+        }
+        let current = self.graph.definitions().get(&context_id).unwrap();
+        self.graph
+            .declarations()
+            .get(&candidate)
+            .unwrap()
+            .definitions()
+            .iter()
+            .any(|id| {
+                let definition = self.graph.definitions().get(id).unwrap();
+                definition.uri_id() != current.uri_id() || definition.offset().start() < current.offset().start()
+            })
     }
 
     /// Drains `pending_work` and classifies items into the resolution queue.

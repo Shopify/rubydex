@@ -32,6 +32,8 @@ pub enum NameDependent {
     ChildName(NameId),
     /// This name's `nesting` is the key name — reference-only dependency.
     NestedName(NameId),
+    /// Superclass visibility depends on bindings of the ordinary class name.
+    SuperclassName(NameId),
 }
 assert_mem_size!(NameDependent, 16);
 
@@ -764,6 +766,14 @@ impl Graph {
         if let Some(name_ref) = self.names.get(&name_id) {
             let parent_scope = name_ref.parent_scope().as_ref().copied();
             let nesting = name_ref.nesting().as_ref().copied();
+            let name = match name_ref {
+                NameRef::Unresolved(name) => name.as_ref(),
+                NameRef::Resolved(name) => name.name(),
+            };
+            let superclass_name = name.superclass_context().map(|_| name.ordinary_id());
+            if let Some(ordinary_id) = superclass_name {
+                self.remove_name_dependent(ordinary_id, NameDependent::SuperclassName(name_id));
+            }
 
             if let Some(ps_id) = parent_scope {
                 self.remove_name_dependent(ps_id, NameDependent::ChildName(name_id));
@@ -1237,6 +1247,7 @@ impl Graph {
             // files must be re-queued — their resolution path through this
             // declaration is broken and needs to be retried after re-add.
             for name_id in seed_names {
+                self.queue_superclass_owner(name_id, queue);
                 self.unresolve_name(name_id);
                 self.queue_structural_cascade(name_id, queue);
 
@@ -1325,9 +1336,60 @@ impl Graph {
         }
     }
 
+    /// A newly attached spelling (for example `G::A`) may change visibility for
+    /// a superclass indexed under another spelling (`module G; class A < A`).
+    pub(crate) fn invalidate_superclass_bindings(&mut self, declaration_id: DeclarationId) -> Vec<Unit> {
+        let mut contexts = IdentityHashSet::default();
+        let Some(declaration) = self.declarations.get(&declaration_id) else {
+            return Vec::new();
+        };
+        let defining_names: IdentityHashSet<_> = declaration
+            .definitions()
+            .iter()
+            .filter_map(|id| self.definitions.get(id).and_then(Definition::name_id).copied())
+            .collect();
+        for name_id in defining_names {
+            if let Some(dependents) = self.name_dependents.get(&name_id) {
+                for dependent in dependents {
+                    if let NameDependent::SuperclassName(id) = dependent
+                        && matches!(self.names.get(id), Some(NameRef::Resolved(_)))
+                    {
+                        contexts.insert(*id);
+                    }
+                }
+            }
+        }
+        if contexts.is_empty() {
+            return Vec::new();
+        }
+        let previous_work = self.pending_work.len();
+        self.invalidate_graph(
+            contexts.into_iter().map(InvalidationItem::Name).collect(),
+            IdentityHashMap::default(),
+        );
+        self.pending_work.split_off(previous_work)
+    }
+
+    /// A changed superclass expression also invalidates the class's cached ancestry.
+    fn queue_superclass_owner(&self, name_id: NameId, queue: &mut Vec<InvalidationItem>) {
+        let Some(name_ref) = self.names.get(&name_id) else {
+            return;
+        };
+        let name = match name_ref {
+            NameRef::Unresolved(name) => name.as_ref(),
+            NameRef::Resolved(name) => name.name(),
+        };
+        if let Some(context) = name.superclass_context()
+            && let Some(owner) = self.definition_id_to_declaration_id(context)
+        {
+            queue.push(InvalidationItem::Declaration(*owner));
+        }
+    }
+
     /// The name's structural dependency is broken (its nesting or parent scope was removed).
     /// Unresolves the name and cascades to all dependents — both references and definitions.
     fn unresolve_dependent_name(&mut self, name_id: NameId, queue: &mut Vec<InvalidationItem>) {
+        self.queue_superclass_owner(name_id, queue);
         let dependents: Vec<NameDependent> = self.name_dependents.get(&name_id).cloned().unwrap_or_default();
         self.queue_structural_cascade(name_id, queue);
 
@@ -1355,7 +1417,7 @@ impl Graph {
                             queue.push(InvalidationItem::Declaration(old_decl_id));
                         }
                     }
-                    NameDependent::ChildName(_) | NameDependent::NestedName(_) => {}
+                    NameDependent::ChildName(_) | NameDependent::NestedName(_) | NameDependent::SuperclassName(_) => {}
                 }
             }
         }
@@ -1364,6 +1426,7 @@ impl Graph {
     /// Ancestor context changed but the name itself is still valid.
     /// Unresolves constant references under this name without unresolving the name itself.
     fn unresolve_dependent_references(&mut self, name_id: NameId, queue: &mut Vec<InvalidationItem>) {
+        self.queue_superclass_owner(name_id, queue);
         let dependents: Vec<NameDependent> = self.name_dependents.get(&name_id).cloned().unwrap_or_default();
         self.queue_ancestor_triggered_invalidation(name_id, queue);
 
@@ -1385,7 +1448,9 @@ impl Graph {
         if let Some(deps) = self.name_dependents.get(&name_id) {
             for dep in deps {
                 match dep {
-                    NameDependent::ChildName(id) | NameDependent::NestedName(id) => {
+                    NameDependent::ChildName(id)
+                    | NameDependent::NestedName(id)
+                    | NameDependent::SuperclassName(id) => {
                         queue.push(InvalidationItem::Name(*id));
                     }
                     NameDependent::Reference(_) | NameDependent::Definition(_) => {}
@@ -1400,7 +1465,7 @@ impl Graph {
         if let Some(deps) = self.name_dependents.get(&name_id) {
             for dep in deps {
                 match dep {
-                    NameDependent::ChildName(id) => {
+                    NameDependent::ChildName(id) | NameDependent::SuperclassName(id) => {
                         queue.push(InvalidationItem::Name(*id));
                     }
                     NameDependent::NestedName(id) => {
