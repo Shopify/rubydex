@@ -157,6 +157,23 @@ This creates:
 
 **Important:** `Foo::Bar::Baz::Qux::Quuux` does **not** exist because `::Quuux` resets to top level.
 
+A compact class definition does not add each qualified prefix to lexical nesting. For example, `Module.nesting` inside
+`class Outer::Base::Child` contains only `Outer::Base::Child`. Unqualified constants are searched through that class's
+ancestors after lexical lookup, so a top-level constant can be found through `Object` when the class inherits from
+`Outer::Base`:
+
+```ruby
+module Outer; end
+class Record; LIMIT = 4; end
+class Outer::Base; end
+
+class Outer::Base::Child < Outer::Base
+  def limit
+    Record::LIMIT # Record is found through Outer::Base and Object
+  end
+end
+```
+
 ## Definitions vs Declarations
 
 A fundamental concept in Ruby is that classes and modules can be reopened and defined multiple times.
