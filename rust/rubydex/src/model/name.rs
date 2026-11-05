@@ -5,7 +5,7 @@ use crate::{
     model::{
         id::id_from_parts,
         identity_maps::IdentityHashMap,
-        ids::{DeclarationId, NameId, StringId},
+        ids::{DeclarationId, DefinitionId, NameId, StringId},
     },
 };
 
@@ -93,15 +93,20 @@ pub struct Name {
     /// The ID of the name for the nesting where we found this name. This effectively turns the structure into a linked
     /// list of names to represent the nesting
     nesting: Option<NameId>,
+    /// Evaluate this superclass before the named class definition becomes visible.
+    superclass_context: Option<DefinitionId>,
     ref_count: u32,
     /// The depth of the name, which combines the depths of the parent scope and nesting
     depth: u16,
 }
-assert_mem_size!(Name, 40);
+assert_mem_size!(Name, 48);
 
 impl PartialEq for Name {
     fn eq(&self, other: &Self) -> bool {
-        self.str == other.str && self.parent_scope == other.parent_scope && self.nesting == other.nesting
+        self.str == other.str
+            && self.parent_scope == other.parent_scope
+            && self.nesting == other.nesting
+            && self.superclass_context == other.superclass_context
     }
 }
 
@@ -117,9 +122,21 @@ impl Name {
             str,
             parent_scope,
             nesting,
+            superclass_context: None,
             ref_count: 1,
             depth: Self::name_depth(names, parent_scope, nesting),
         }
+    }
+
+    #[must_use]
+    pub fn with_superclass_context(mut self, context: Option<DefinitionId>) -> Self {
+        self.superclass_context = context;
+        self
+    }
+
+    #[must_use]
+    pub fn superclass_context(&self) -> Option<DefinitionId> {
+        self.superclass_context
     }
 
     #[must_use]
@@ -158,6 +175,16 @@ impl Name {
 
     #[must_use]
     pub fn id(&self) -> NameId {
+        let ordinary_id = self.ordinary_id();
+        match self.superclass_context {
+            Some(context) => id_from_parts!(NameId; ordinary_id.get(), context.get(), 4_u8),
+            None => ordinary_id,
+        }
+    }
+
+    /// The same spelling and lexical context without superclass-specific visibility.
+    #[must_use]
+    pub fn ordinary_id(&self) -> NameId {
         // We need to include both the variant and the bytes of the parent scope when present
         let (parent_tag, parent_id): (u8, u64) = match self.parent_scope {
             ParentScope::None => (0, 0),
@@ -179,7 +206,7 @@ pub struct ResolvedName {
     name: Name,
     declaration_id: DeclarationId,
 }
-assert_mem_size!(ResolvedName, 48);
+assert_mem_size!(ResolvedName, 56);
 
 impl ResolvedName {
     #[must_use]
@@ -346,6 +373,24 @@ mod tests {
             Some(Name::new(&names, StringId::from("Foo"), ParentScope::None, None).id()),
         );
         assert_eq!(name_7.id(), name_8.id());
+    }
+
+    #[test]
+    fn superclass_context_has_distinct_identity_without_changing_ordinary_names() {
+        let names = IdentityHashMap::default();
+        let ordinary = Name::new(&names, StringId::from("A"), ParentScope::None, None);
+        let first = ordinary
+            .clone()
+            .with_superclass_context(Some(DefinitionId::from("first")));
+        let second = ordinary
+            .clone()
+            .with_superclass_context(Some(DefinitionId::from("second")));
+        assert_eq!(ordinary.id(), ordinary.ordinary_id());
+        assert_eq!(first.ordinary_id(), ordinary.id());
+        assert_ne!(first.id(), ordinary.id());
+        assert_ne!(first.id(), second.id());
+        assert_ne!(first, second);
+        assert_eq!(first.clone().with_superclass_context(None), ordinary);
     }
 
     #[test]

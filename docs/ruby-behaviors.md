@@ -82,6 +82,30 @@ Both methods can coexist because they operate on different receivers:
 
 ## Lexical Scoping and Constant Resolution
 
+### Namesake Superclass Expressions
+
+Ruby evaluates a superclass expression before introducing a newly declared class. The enclosing lexical scopes and
+ancestors remain available during that lookup:
+
+```ruby
+class A; end
+module M
+  class A; end
+end
+module G
+  include M
+  class A < A; end  # Superclass is M::A, not the new G::A or top-level A
+  A                # Subsequent ordinary lookup resolves G::A
+end
+```
+
+An existing outer lexical binding still takes precedence over an enclosing scope's ancestors. An earlier binding in the
+same scope remains visible, even when using it as the superclass subsequently raises a superclass-mismatch error. A later
+reopening in the same source does not make that binding visible retroactively to the earlier superclass expression.
+
+Rubydex preserves bindings from other documents when resolving these expressions. This is a static indexing policy, not
+an inference of Ruby's runtime file-loading order from URI names or document insertion order.
+
 ### Fully Qualified Name Resolution Rules
 
 Ruby resolves names according to the current scope:
@@ -1283,6 +1307,24 @@ Foo.ancestors          # => [Foo, Object, Kernel, BasicObject]
 Object.ancestors       # => [Object, Kernel, BasicObject]
 BasicObject.ancestors  # => [BasicObject]
 ```
+
+### Superclass lookup while defining a class
+
+Ruby evaluates a class's superclass expression before binding a new class constant. As a result, when a class name is
+also used as an unqualified superclass inside a lexical scope, that in-progress definition must not shadow an outer
+constant with the same name:
+
+```ruby
+class ApplicationRecord; end
+
+module GSD
+  class ApplicationRecord < ApplicationRecord; end
+end
+
+GSD::ApplicationRecord.superclass # => ::ApplicationRecord
+```
+
+A binding already present in that lexical scope remains visible when the class definition is evaluated.
 
 Singleton classes use a separate root rule: `BasicObject.singleton_class.superclass` is `Class`.
 
