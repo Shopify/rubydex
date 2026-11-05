@@ -8,6 +8,12 @@ module Rubydex
       RULE_GLOB = "rubydex_linter/rules/**/*.rb" #: String
 
       class << self
+        # Returns custom rules, including rules below other custom rules.
+        #: -> Array[singleton(CustomRule)]
+        def custom_rules
+          custom_rule_descendants(CustomRule)
+        end
+
         #: (String workspace_path) -> Array[String]
         def paths(workspace_path)
           rule_files = Dir.glob(BUILT_IN_RULE_GLOB)
@@ -27,6 +33,14 @@ module Rubydex
           rescue LoadError, SyntaxError => error
             raise RuleLoadError, "Unable to load linter rules from #{rule_file}: #{error.message}", cause: error
           end
+        end
+
+        private
+
+        # Keep every subclass in the result: a subclass is a rule in its own right, even when it inherits its behaviour.
+        #: (singleton(CustomRule)) -> Array[singleton(CustomRule)]
+        def custom_rule_descendants(base_rule)
+          base_rule.subclasses.flat_map { |rule| [rule, *custom_rule_descendants(rule)] }
         end
       end
     end

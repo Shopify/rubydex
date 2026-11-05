@@ -574,7 +574,7 @@ class CLITest < Minitest::Test
       context.write!("app.rb", "class Foo; end\nclass Foo; end\n")
       Rubydex::Linter::RuleLoader.expects(:load)
         .with(context.absolute_path)
-      Rubydex::Linter::CustomRule.stubs(:subclasses).returns([CLITestProjectErrorRule])
+      Rubydex::Linter::RuleLoader.stubs(:custom_rules).returns([CLITestProjectErrorRule])
 
       Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
       result = rdx("lint")
@@ -604,12 +604,62 @@ class CLITest < Minitest::Test
     end
   end
 
+  def test_lint_discovers_nested_rules_that_inherit_rule_behaviour
+    with_context do |context|
+      context.write!("app.rb", "class Foo; end\n")
+      context.write!("rubydex_linter/rules/nested_rule_regression/application_rule.rb", <<~RUBY)
+        module Rubydex::Linter::Rules::NestedRuleRegression
+          # Reports forbidden Foo classes.
+          class ApplicationRule < Rubydex::Linter::CustomRule
+            def lint
+              definition = graph["Foo"]&.definitions&.first
+              add_diagnostic("Foo is not allowed.", diagnostic_location(definition)) if definition
+            end
+
+            class << self
+              def default_severity = Rubydex::Severity::Warning
+            end
+          end
+        end
+      RUBY
+      context.write!("rubydex_linter/rules/nested_rule_regression/no_foo.rb", <<~RUBY)
+        module Rubydex::Linter::Rules::NestedRuleRegression
+          # Uses the shared implementation with error severity.
+          class NoFoo < ApplicationRule
+            class << self
+              def default_severity = Rubydex::Severity::Error
+            end
+          end
+        end
+      RUBY
+
+      Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
+      Rubydex::Linter::RuleLoader.load(context.absolute_path)
+      custom_rules = Rubydex::Linter::RuleLoader.custom_rules
+      nested_rule = custom_rules.find { |rule| rule.name == "Rubydex::Linter::Rules::NestedRuleRegression::NoFoo" }
+
+      assert_includes(
+        custom_rules,
+        Rubydex::Linter::Rules::NestedRuleRegression::ApplicationRule,
+      )
+      assert(nested_rule)
+
+      Rubydex::Linter::RuleLoader.stubs(:load).with(context.absolute_path)
+      Rubydex::Linter::RuleLoader.stubs(:custom_rules)
+        .returns([Rubydex::Linter::Rules::RuleStructure, nested_rule])
+      result = rdx("lint", chdir: context.absolute_path)
+
+      refute_success_status(result)
+      assert_stdout_includes(result, "error: NoFoo: Foo is not allowed.")
+    end
+  end
+
   def test_lint_allows_a_clean_workspace
     with_context do |context|
       context.write!("app.rb", "class Bar; end\n")
       Rubydex::Linter::RuleLoader.expects(:load)
         .with(context.absolute_path)
-      Rubydex::Linter::CustomRule.stubs(:subclasses).returns([CLITestProjectErrorRule])
+      Rubydex::Linter::RuleLoader.stubs(:custom_rules).returns([CLITestProjectErrorRule])
 
       Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
       result = rdx("lint")
@@ -622,7 +672,7 @@ class CLITest < Minitest::Test
   def test_lint_allows_a_plain_workspace_without_project_rules
     with_context do |context|
       context.write!("app.rb", "class App; end\n")
-      Rubydex::Linter::CustomRule.stubs(:subclasses).returns([Rubydex::Linter::Rules::RuleStructure])
+      Rubydex::Linter::RuleLoader.stubs(:custom_rules).returns([Rubydex::Linter::Rules::RuleStructure])
 
       Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
       result = rdx("lint")
@@ -638,7 +688,7 @@ class CLITest < Minitest::Test
         [linter.rules.ParseError]
         exclude = ["**/foo.rb"]
       TOML
-      Rubydex::Linter::CustomRule.stubs(:subclasses).returns([])
+      Rubydex::Linter::RuleLoader.stubs(:custom_rules).returns([])
 
       Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
       result = rdx("lint")
@@ -654,7 +704,7 @@ class CLITest < Minitest::Test
         [linter.rules.UnknownRule]
         exclude = ["**/foo.rb"]
       TOML
-      Rubydex::Linter::CustomRule.stubs(:subclasses).returns([Rubydex::Linter::Rules::RuleStructure])
+      Rubydex::Linter::RuleLoader.stubs(:custom_rules).returns([Rubydex::Linter::Rules::RuleStructure])
 
       Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
       result = rdx("lint")
@@ -669,7 +719,7 @@ class CLITest < Minitest::Test
       context.write!("app.rb", "class Broken\n")
       Rubydex::Linter::RuleLoader.expects(:load)
         .with(context.absolute_path)
-      Rubydex::Linter::CustomRule.stubs(:subclasses).returns([])
+      Rubydex::Linter::RuleLoader.stubs(:custom_rules).returns([])
 
       Bundler.stubs(:root).returns(Pathname.new(context.absolute_path))
       result = rdx("lint")

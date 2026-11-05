@@ -59,7 +59,7 @@ class RuleLoaderTest < Minitest::Test
         Rubydex::Linter::RuleLoader.load(context.absolute_path)
       end
 
-      assert_includes(Rubydex::Linter::CustomRule.subclasses, Rubydex::Linter::Rules::RuleStructure)
+      assert_includes(Rubydex::Linter::RuleLoader.custom_rules, Rubydex::Linter::Rules::RuleStructure)
     end
   end
 
@@ -71,7 +71,7 @@ class RuleLoaderTest < Minitest::Test
         Rubydex::Linter::RuleLoader.load(context.absolute_path)
       end
 
-      assert_includes(Rubydex::Linter::CustomRule.subclasses.map(&:rule_name), "RuleLoaderTestProjectRule")
+      assert_includes(Rubydex::Linter::RuleLoader.custom_rules.map(&:rule_name), "RuleLoaderTestProjectRule")
     end
   end
 
@@ -87,7 +87,7 @@ class RuleLoaderTest < Minitest::Test
         Rubydex::Linter::RuleLoader.load(context.absolute_path_to("workspace"))
       end
 
-      assert_includes(Rubydex::Linter::CustomRule.subclasses.map(&:rule_name), "RuleLoaderTestDependencyRule")
+      assert_includes(Rubydex::Linter::RuleLoader.custom_rules.map(&:rule_name), "RuleLoaderTestDependencyRule")
     end
   end
 
