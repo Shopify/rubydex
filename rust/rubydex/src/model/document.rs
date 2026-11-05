@@ -6,6 +6,7 @@ use xxhash_rust::xxh3::xxh3_64;
 
 use crate::assert_mem_size;
 use crate::diagnostic::Diagnostic;
+use crate::model::comment::CommentGroup;
 use crate::model::ids::{ConstantReferenceId, DefinitionId, MethodReferenceId};
 
 // Represents a document currently loaded into memory. Identified by its unique URI, it holds the edges to all
@@ -17,10 +18,11 @@ pub struct Document {
     definition_ids: Vec<DefinitionId>,
     method_reference_ids: Vec<MethodReferenceId>,
     constant_reference_ids: Vec<ConstantReferenceId>,
+    comment_groups: Option<Box<[CommentGroup]>>,
     diagnostics: Vec<Diagnostic>,
     content_hash: u64,
 }
-assert_mem_size!(Document, 176);
+assert_mem_size!(Document, 192);
 
 impl Document {
     #[must_use]
@@ -31,6 +33,7 @@ impl Document {
             definition_ids: Vec::new(),
             method_reference_ids: Vec::new(),
             constant_reference_ids: Vec::new(),
+            comment_groups: None,
             diagnostics: Vec::new(),
             content_hash: xxh3_64(source.as_bytes()),
         }
@@ -54,6 +57,16 @@ impl Document {
     #[must_use]
     pub fn definitions(&self) -> &[DefinitionId] {
         &self.definition_ids
+    }
+
+    /// Returns comment groups in this document that are not attached to a definition.
+    #[must_use]
+    pub fn comments(&self) -> &[CommentGroup] {
+        self.comment_groups.as_deref().unwrap_or(&[])
+    }
+
+    pub(crate) fn set_comments(&mut self, comment_groups: Box<[CommentGroup]>) {
+        self.comment_groups = (!comment_groups.is_empty()).then_some(comment_groups);
     }
 
     pub fn add_definition(&mut self, definition_id: DefinitionId) {

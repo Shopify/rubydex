@@ -575,6 +575,9 @@ class Rubydex::KeywordParameter
 end
 
 class Rubydex::Document
+  sig { returns(T::Array[T::Array[Rubydex::Comment]]) }
+  def comments; end
+
   sig { returns(T::Enumerable[Rubydex::Definition]) }
   def definitions; end
 

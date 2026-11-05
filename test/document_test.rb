@@ -134,4 +134,144 @@ class DocumentTest < Minitest::Test
       assert_equal("#{context.absolute_path_to("file1.rb")}:3:5-3:8", reference.location.to_display.to_s)
     end
   end
+
+  def test_unattached_comment_groups
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          # attached to bar
+          def bar; end
+
+          #: type rel = Shop::PrivateRelation
+          #: type other = Shop::OtherRelation
+
+          # dynamic receiver comments are not attached to a definition
+          def receiver.foo; end
+
+          module Bar
+            # comment on a module_function definition
+            module_function def baz; end
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      document = graph.documents.find { |doc| doc.uri == context.uri_to("file1.rb") }
+      assert_equal(
+        [
+          ["#: type rel = Shop::PrivateRelation", "#: type other = Shop::OtherRelation"],
+          ["# dynamic receiver comments are not attached to a definition"],
+        ],
+        document.comments.map { |group| group.map(&:string) },
+      )
+
+      bar = document.definitions.find { |definition| definition.name == "bar()" }
+      assert_equal(["# attached to bar"], bar.comments.map(&:string))
+      baz = document.definitions.find { |definition| definition.name == "baz()" }
+      assert_equal(["# comment on a module_function definition"], baz.comments.map(&:string))
+      assert_instance_of(Rubydex::Comment, document.comments.first.first)
+      assert_equal(5, document.comments.first.first.location.to_display.start_line)
+    end
+  end
+
+  def test_comments_is_empty_when_all_comments_are_attached
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        # attached to Foo
+        class Foo; end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      document = graph.documents.find { |doc| doc.uri == context.uri_to("file1.rb") }
+      assert_empty(document.comments)
+    end
+  end
+
+  def test_comments_is_empty_for_an_empty_document
+    with_context do |context|
+      context.write!("file1.rb", "")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      document = graph.documents.find { |doc| doc.uri == context.uri_to("file1.rb") }
+      assert_empty(document.comments)
+    end
+  end
+
+  def test_unattached_comments_can_be_read_repeatedly
+    with_context do |context|
+      context.write!("file1.rb", "# unattached\n")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      document = graph.documents.find { |doc| doc.uri == context.uri_to("file1.rb") }
+      first = document.comments
+      GC.start
+      second = document.comments
+
+      assert_equal(["# unattached"], first.flatten.map(&:string))
+      assert_equal(["# unattached"], second.flatten.map(&:string))
+      assert_equal(1, first.first.first.location.to_display.start_line)
+      assert_equal(1, second.first.first.location.to_display.start_line)
+    end
+  end
+
+  def test_trailing_inline_comment_is_not_attached_to_the_next_definition
+    with_context do |context|
+      context.write!("file1.rb", "def first; end # belongs to first\ndef second; end\n")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      document = graph.documents.find { |doc| doc.uri == context.uri_to("file1.rb") }
+      second = document.definitions.find { |definition| definition.name == "second()" }
+
+      assert_empty(second.comments)
+      assert_equal([["# belongs to first"]], document.comments.map { |group| group.map(&:string) })
+    end
+  end
+
+  def test_unattached_comments_preserve_nul_bytes
+    with_context do |context|
+      context.write!("file1.rb", "# unattached before\0after\n")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      document = graph.documents.find { |doc| doc.uri == context.uri_to("file1.rb") }
+      assert_equal(["# unattached before\0after"], document.comments.flatten.map(&:string))
+    end
+  end
+
+  def test_unattached_comment_memory_is_freed_when_ruby_construction_raises
+    with_context do |context|
+      context.write!("file1.rb", "# unattached\n")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      document = graph.documents.find { |doc| doc.uri == context.uri_to("file1.rb") }
+
+      comment_class = Rubydex::Comment
+      original_initialize = comment_class.instance_method(:initialize)
+      original_verbose = $VERBOSE
+      begin
+        $VERBOSE = nil
+        comment_class.define_method(:initialize) { |**_kwargs| raise "comment construction failed" }
+        $VERBOSE = original_verbose
+
+        error = assert_raises(RuntimeError) { document.comments }
+        assert_equal("comment construction failed", error.message)
+      ensure
+        $VERBOSE = nil
+        comment_class.define_method(:initialize, original_initialize) if original_initialize
+        $VERBOSE = original_verbose
+      end
+    end
+  end
 end

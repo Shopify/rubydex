@@ -3,10 +3,11 @@
 //! Walks the parsed AST and produces `Vec<Operation>` that can later be applied
 //! by the applier to create definitions and declarations in a `LocalGraph`.
 
+use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 
 use crate::diagnostic::{Diagnostic, Rule};
-use crate::model::comment::Comment;
+use crate::model::comment::{Comment, CommentGroup as DocumentCommentGroup};
 use crate::model::definitions::{DefinitionFlags, Parameter, ParameterStruct, Signatures};
 use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
@@ -126,6 +127,26 @@ impl<'a> RubyOperationBuilder<'a> {
 
         self.comments = self.parse_comments_into_groups(&result);
         self.visit(&result.node());
+
+        let attached_comment_starts = self
+            .operations
+            .iter()
+            .flat_map(Operation::comments)
+            .map(|comment| comment.offset().start())
+            .collect::<HashSet<_>>();
+        let comment_groups = self
+            .comments
+            .drain(..)
+            .filter(|group| {
+                group
+                    .comments
+                    .first()
+                    .is_some_and(|comment| !attached_comment_starts.contains(&comment.offset().start()))
+            })
+            .map(|group| DocumentCommentGroup::new(group.comments.into_boxed_slice()))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        self.document.set_comments(comment_groups);
 
         OperationBuilderResult {
             uri_id: self.uri_id,
@@ -249,6 +270,17 @@ impl<'a> RubyOperationBuilder<'a> {
         };
 
         let group = &self.comments[idx];
+        let first_comment_offset = group.comments[0].offset().start() as usize;
+        let comment_line_start = self.source[..first_comment_offset]
+            .rfind('\n')
+            .map_or(0, |line_break| line_break + 1);
+        if !self.source.as_bytes()[comment_line_start..first_comment_offset]
+            .iter()
+            .all(|&b| b.is_ascii_whitespace())
+        {
+            return (Box::default(), DefinitionFlags::empty());
+        }
+
         let between = &self.source.as_bytes()[group.end_offset..offset_usize];
         if !between.iter().all(|&b| b.is_ascii_whitespace()) {
             return (Box::default(), DefinitionFlags::empty());
