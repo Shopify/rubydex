@@ -32,7 +32,7 @@ test_utils = ["dep:tempfile"]
 
 [dependencies]
 cypher-parser = "0.8.1"
-ruby-prism = "2.0.0"
+ruby-prism = "2.1.0"
 ruby-rbs = "0.3"
 url = "2.5.4"
 xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
