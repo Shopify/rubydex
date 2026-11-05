@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "thread"
 
 require "rubydex"
 require "rubydex/mcp_server/protocol"
@@ -12,6 +13,7 @@ module Rubydex
     SERVER_INSTRUCTIONS = <<~TEXT
       Tools query a static index of workspace code, available bundle dependencies, and available Ruby core and standard-library RBS definitions.
       The index is built at server startup and does not track file changes; restart the server to refresh it.
+      Tool calls with a progress token wait for startup indexing to finish and report the indexing and resolution phases.
     TEXT
 
     class Server
@@ -23,7 +25,9 @@ module Rubydex
         @root_path = root_path
         @transport = transport
         @graph = Graph.configure_for_workspace(@root_path)
-        @index_finished = false
+        @index_mutex = Mutex.new
+        @index_condition = ConditionVariable.new
+        @index_state = :not_started
         @incoming_queue = Thread::Queue.new
         @outgoing_queue = Thread::Queue.new
         @workers = []
@@ -35,10 +39,25 @@ module Rubydex
 
       #: -> Thread
       def spawn_indexer
+        @index_mutex.synchronize do
+          @index_state = :indexing
+        end
+
         @indexer = Thread.new do
           @graph.index_workspace
+          update_index_state(:resolving)
           @graph.resolve
-          @index_finished = true
+          update_index_state(:ready)
+        rescue StandardError => e
+          warn("Rubydex MCP indexing failed: #{e.full_message}")
+          update_index_state(:failed)
+        ensure
+          @index_mutex.synchronize do
+            if [:indexing, :resolving].include?(@index_state)
+              @index_state = :failed
+            end
+            @index_condition.broadcast
+          end
         end
       end
 
@@ -131,7 +150,16 @@ module Rubydex
 
       #: -> Graph | Error
       def graph_or_error
-        return @graph if @index_finished
+        state = @index_mutex.synchronize { @index_state }
+        return @graph if state == :ready
+
+        if state == :failed
+          return Error.new(
+            "indexing_failed",
+            "Rubydex failed to index the codebase",
+            "Check the server logs for details.",
+          )
+        end
 
         Error.new(
           "indexing",
@@ -208,11 +236,62 @@ module Rubydex
           ).to_h
         end
 
+        wait_for_index(progress_token_from(params))
         graph = graph_or_error
         return Tool::Response.new([{ type: "text", text: JSON.generate(graph) }]).to_h if graph.is_a?(Error)
 
         response = tool.new(graph).call(**arguments.transform_keys(&:to_sym))
         response.to_h
+      end
+
+      #: (Hash) -> (String | Integer | nil)
+      def progress_token_from(params)
+        metadata = params[:_meta] || params["_meta"]
+        return unless metadata.is_a?(Hash)
+
+        token = metadata.fetch(:progressToken, metadata["progressToken"])
+        token if token.is_a?(String) || token.is_a?(Integer)
+      end
+
+      #: (String | Integer | nil) -> void
+      def wait_for_index(progress_token)
+        return unless progress_token
+
+        last_progress = 0
+        @index_mutex.synchronize do
+          while [:indexing, :resolving].include?(@index_state)
+            progress, message = if @index_state == :indexing
+              [1, "Indexing workspace"]
+            else
+              [2, "Resolving graph"]
+            end
+
+            if progress > last_progress
+              send_message(
+                {
+                  jsonrpc: "2.0",
+                  method: "notifications/progress",
+                  params: {
+                    progressToken: progress_token,
+                    progress: progress,
+                    message: message,
+                  },
+                },
+              )
+              last_progress = progress
+            end
+
+            @index_condition.wait(@index_mutex)
+          end
+        end
+      end
+
+      #: (Symbol) -> void
+      def update_index_state(state)
+        @index_mutex.synchronize do
+          @index_state = state
+          @index_condition.broadcast
+        end
       end
     end
 
