@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "bundler"
+require "pathname"
 require "uri"
 
 # Files that must be loaded before the C extension
