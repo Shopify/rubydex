@@ -30,10 +30,17 @@ module Rubydex
     def severity_for(rule_class)
       @rules[rule_class.rule_name]&.severity
     end
+
+    #: (singleton(Rule) rule_class) -> Hash[String, RuleConfig::option_value]
+    def options_for(rule_class)
+      @rules[rule_class.rule_name]&.options || {}.freeze
+    end
   end
 
   # The settings of a single linter rule, read from a `[linter.rules.RuleName]` table.
   class RuleConfig
+    #: type option_value = String | Integer | Float | bool | Array[option_value]
+
     #: String
     attr_reader :name
 
@@ -43,12 +50,16 @@ module Rubydex
     #: singleton(Severity::Base)?
     attr_reader :severity
 
-    #: (String, bool, ?Array[String], ?singleton(Severity::Base)?) -> void
-    def initialize(name, enabled, exclude_patterns = [], severity = nil)
+    #: Hash[String, option_value]
+    attr_reader :options
+
+    #: (String, bool, ?Array[String], ?singleton(Severity::Base)?, ?Hash[String, option_value]) -> void
+    def initialize(name, enabled, exclude_patterns = [], severity = nil, options = {})
       @name = name
       @enabled = enabled
       @exclude_patterns = exclude_patterns
       @severity = severity
+      @options = options.freeze
     end
 
     #: () -> bool

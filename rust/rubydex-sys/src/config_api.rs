@@ -1,7 +1,7 @@
 use crate::diagnostic_api::DiagnosticSeverity;
 use crate::utils;
 use libc::{c_char, c_void};
-use rubydex::config::{Config, Rule};
+use rubydex::config::{Config, Rule, RuleOption};
 use rubydex::errors::Errors;
 use std::ffi::CString;
 use std::path::Path;
@@ -99,6 +99,73 @@ pub struct CConfigString {
     pub length: usize,
 }
 
+impl From<&str> for CConfigString {
+    fn from(value: &str) -> Self {
+        Self {
+            data: value.as_ptr().cast::<c_char>(),
+            length: value.len(),
+        }
+    }
+}
+
+/// A custom option value. Strings borrow the configuration; array buffers are owned by the exported rule array.
+#[repr(C)]
+#[derive(Debug)]
+pub enum CConfigValue {
+    String { value: CConfigString },
+    Integer { value: i64 },
+    Float { value: f64 },
+    Boolean { value: bool },
+    Array { items: *mut CConfigValue, len: usize },
+}
+
+impl From<&RuleOption> for CConfigValue {
+    fn from(value: &RuleOption) -> Self {
+        match value {
+            RuleOption::String(value) => Self::String {
+                value: CConfigString::from(&**value),
+            },
+            RuleOption::Integer(value) => Self::Integer { value: *value },
+            RuleOption::Float(value) => Self::Float { value: *value },
+            RuleOption::Boolean(value) => Self::Boolean { value: *value },
+            RuleOption::Array(values) => {
+                let items = values.iter().map(Self::from).collect::<Box<[_]>>();
+                let len = items.len();
+                let items = if items.is_empty() {
+                    ptr::null_mut()
+                } else {
+                    Box::into_raw(items).cast::<Self>()
+                };
+                Self::Array { items, len }
+            }
+        }
+    }
+}
+
+/// Frees array buffers recursively, leaving borrowed strings untouched.
+///
+/// # Safety
+///
+/// `value` must come from `CConfigValue::from` and its array buffers must not have been freed already.
+unsafe fn free_config_value(value: &CConfigValue) {
+    if let CConfigValue::Array { items, len } = value
+        && !items.is_null()
+    {
+        let values = unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(*items, *len)) };
+        for value in &*values {
+            unsafe { free_config_value(value) };
+        }
+    }
+}
+
+/// A custom option entry. The key and any string values borrow the configuration.
+#[repr(C)]
+#[derive(Debug)]
+pub struct CConfigOption {
+    pub key: CConfigString,
+    pub value: CConfigValue,
+}
+
 /// C-compatible struct representing a single configured linter rule.
 #[repr(C)]
 #[derive(Debug)]
@@ -109,6 +176,8 @@ pub struct CLinterRule {
     pub exclude_patterns: *const CConfigString,
     pub exclude_patterns_length: usize,
     pub severity: *const DiagnosticSeverity,
+    pub options: *mut CConfigOption,
+    pub options_length: usize,
 }
 
 impl From<&Rule> for CLinterRule {
@@ -130,6 +199,20 @@ impl From<&Rule> for CLinterRule {
         let severity = rule.severity().map_or(ptr::null(), |severity| {
             Box::into_raw(Box::new(DiagnosticSeverity::from(*severity))).cast_const()
         });
+        let options = rule
+            .options()
+            .iter()
+            .map(|(key, value)| CConfigOption {
+                key: CConfigString::from(&**key),
+                value: CConfigValue::from(value),
+            })
+            .collect::<Box<[_]>>();
+        let options_length = options.len();
+        let options = if options.is_empty() {
+            ptr::null_mut()
+        } else {
+            Box::into_raw(options).cast::<CConfigOption>()
+        };
 
         Self {
             name: rule.name().as_ptr().cast::<c_char>(),
@@ -138,6 +221,8 @@ impl From<&Rule> for CLinterRule {
             exclude_patterns,
             exclude_patterns_length,
             severity,
+            options,
+            options_length,
         }
     }
 }
@@ -150,7 +235,7 @@ pub struct CLinterRuleArray {
 }
 
 /// Returns the configured linter rules as an array. Caller must free it with `rdx_config_linter_rules_free`, while the
-/// configuration is still alive, since the rule names are borrowed from it.
+/// configuration is still alive, since names, exclusions, and option strings are borrowed from it.
 ///
 /// # Safety
 ///
@@ -199,6 +284,13 @@ pub unsafe extern "C" fn rdx_config_linter_rules_free(rules: CLinterRuleArray) {
 
             if !rule.severity.is_null() {
                 let _ = Box::from_raw(rule.severity.cast_mut());
+            }
+
+            if !rule.options.is_null() {
+                let options = Box::from_raw(ptr::slice_from_raw_parts_mut(rule.options, rule.options_length));
+                for option in &*options {
+                    free_config_value(&option.value);
+                }
             }
         }
     }
