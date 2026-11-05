@@ -121,6 +121,19 @@ impl LocalGraph {
 
     pub fn add_name(&mut self, str: StringId, parent_scope: ParentScope, nesting: Option<NameId>) -> NameId {
         let name = Name::new(&self.names, str, parent_scope, nesting);
+        self.insert_name(name)
+    }
+
+    /// Adds a name evaluated before the constant with the same name in the same scope gets defined, like the superclass
+    /// of `class Foo < Foo`
+    pub fn add_name_before_definition(&mut self, str: StringId, nesting: Option<NameId>) -> NameId {
+        let name = Name::new(&self.names, str, ParentScope::None, nesting).evaluated_before_definition();
+        self.insert_name(name)
+    }
+
+    fn insert_name(&mut self, name: Name) -> NameId {
+        let parent_scope = *name.parent_scope();
+        let nesting = *name.nesting();
         let name_id = name.id();
 
         match self.names.entry(name_id) {

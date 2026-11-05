@@ -1064,6 +1064,7 @@ Foo.constants  # => [] (private constants hidden from .constants)
 - `Foo.constants` excludes private constants
 - `Foo.const_defined?(:PRIV)` returns **true** even for private constants — visibility doesn't affect `const_defined?`
 - `Foo.const_get(:PRIV)` **bypasses** private constant visibility and returns the value — only the `::` operator enforces `private_constant`
+- The `::` operator enforces it everywhere, even inside the class itself (`Foo::PRIV` within `class Foo`) and for top-level constants (`::PRIV`, `Object::PRIV`). Rubydex still resolves these references, so navigation works, and reports them as `PrivateConstantReference`
 
 #### `public_constant`
 
@@ -1387,6 +1388,30 @@ class Child < Parent
 end
 ```
 
+### The Starting Namespace Is Checked Before Its Prepends
+
+Every constant search starts by checking the starting namespace's own constants, and only then walks its ancestors.
+This is invisible unless something is prepended to the starting namespace: `rb_const_search_from` only skips a
+prepended class in favour of its origin after the first step of the walk.
+
+```ruby
+module P; X = 1; end
+
+class C
+  prepend P
+  X = 2
+end
+
+class D < C; end
+
+C.ancestors # => [P, C, Object, Kernel, BasicObject]
+C::X        # => 2, C's own constant comes first
+D::X        # => 1, the walk from D reaches P before C
+```
+
+The same applies to the searches that start from `Object`: top-level references, `::X` and the module fallback all
+check `Object`'s own constants before any module prepended to `Object`.
+
 ### Constant Paths
 
 Ruby supports qualified constant paths:
@@ -1401,6 +1426,60 @@ end
 
 Constant paths are resolved left-to-right: `Object` is resolved first, then `String` is looked up within `Object`.
 
+A qualified lookup like `Foo::Bar` searches `Foo` and its ancestors, with two differences from a bare `Bar`: lexical
+scopes are not consulted, and if the first owner found is `Object` itself, the constant is not found unless the
+search started at `Object`. Owners after `Object` in the chain, like `Kernel`, are still found:
+
+```ruby
+TOP = 1
+module Kernel; K = 2; end
+class Foo; end
+
+Foo::TOP    # NameError: uninitialized constant Foo::TOP
+Foo::K      # => 2
+Object::TOP # => 1
+```
+
+### Superclass With the Same Name
+
+The superclass expression is evaluated before `class` creates the new constant. So in `class Foo < Foo`, the superclass
+can't be the class being defined, and the lookup continues past it: other lexical scopes, the enclosing namespace's
+ancestors, and the top level.
+
+```ruby
+class ApplicationRecord; end
+
+module GSD
+  class ApplicationRecord < ApplicationRecord # superclass is ::ApplicationRecord
+  end
+end
+```
+
+### Conditional Assignment
+
+`X ||= value` is `defined?(X) ? X : (X = value)`. The `defined?` check is the full lookup for `X` (lexical scopes,
+ancestors, the module fallback), so the assignment only happens when `X` isn't reachable yet:
+
+```ruby
+class Parent
+  VERSION = "1"
+end
+
+class Child < Parent
+  VERSION ||= "2" # defines nothing: VERSION resolves to Parent::VERSION
+end
+
+Child.const_defined?(:VERSION, false) # => false
+```
+
+For a constant path, `Foo::X ||= value` uses the qualified lookup, so a top-level `X` does not count and `Foo::X` is
+defined.
+
+`self::Bar` is a qualified lookup on whatever `self` is. Directly in a class, module or singleton class body, `self` is
+that namespace, so `self::Bar` behaves like `Foo::Bar`. Inside a method it depends on the receiver (a subclass calling
+an inherited method sees its own constants), and a block may run with another `self` through `instance_eval` or
+`class_eval`, so those cases cannot be resolved statically.
+
 ## Constant Aliases
 
 Constants can be assigned to reference other constants, creating **aliases**:
@@ -1412,6 +1491,21 @@ end
 
 ALIAS = Foo
 ALIAS::CONST  # Resolves to Foo::CONST (123)
+```
+
+### Reassigned Aliases
+
+Reassigning a constant replaces its value (with an "already initialized constant" warning), so the last plain
+assignment wins. A `||=` assignment only takes effect when nothing was assigned before it:
+
+```ruby
+X = A
+X = B
+X::C # => B::C
+
+Z = A
+Z ||= B
+Z::C # => A::C
 ```
 
 ### Chained Aliases

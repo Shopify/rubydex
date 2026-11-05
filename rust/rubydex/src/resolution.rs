@@ -2,7 +2,7 @@ use std::collections::{HashSet, VecDeque, hash_map::Entry};
 
 use crate::diagnostic::{Diagnostic, Rule};
 use crate::model::{
-    built_in::{BASIC_OBJECT_ID, CLASS_ID, KERNEL_ID, MODULE_ID, OBJECT_ID},
+    built_in::{BASIC_OBJECT_ID, BUILT_IN_URI_ID, CLASS_ID, KERNEL_ID, MODULE_ID, OBJECT_ID},
     declaration::{
         Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration, ConstantDeclaration,
         Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
@@ -101,6 +101,12 @@ pub struct Resolver<'a> {
     made_progress: bool,
     /// The linearization context carried across recursion
     context: LinearizationContext,
+    /// Constant path references (`Foo::BAR`, `::BAR`) resolved in this run. Their visibility can only be checked once
+    /// `private_constant` calls are applied, after the convergence loop
+    resolved_constant_paths: Vec<ConstantReferenceId>,
+    /// Conditional (`||=`) definitions already put back once because their lookup was blocked by a partial ancestor
+    /// chain
+    deferred_conditionals: IdentityHashSet<DefinitionId>,
 }
 
 impl<'a> Resolver<'a> {
@@ -110,6 +116,8 @@ impl<'a> Resolver<'a> {
             unit_queue: VecDeque::new(),
             made_progress: false,
             context: LinearizationContext::new(),
+            resolved_constant_paths: Vec::new(),
+            deferred_conditionals: IdentityHashSet::default(),
         }
     }
 
@@ -165,6 +173,53 @@ impl<'a> Resolver<'a> {
         self.graph.extend_work(std::mem::take(&mut self.unit_queue));
 
         self.handle_remaining_definitions(other_ids);
+        self.report_private_constant_paths();
+    }
+
+    /// Emits a diagnostic for every constant path resolved in this run that names a private constant. Only the `::`
+    /// operator enforces `private_constant`: unqualified references from the lexical scope or through inheritance are
+    /// allowed, and so is `const_get`.
+    fn report_private_constant_paths(&mut self) {
+        for reference_id in std::mem::take(&mut self.resolved_constant_paths) {
+            let Some(reference) = self.graph.constant_references().get(&reference_id) else {
+                continue;
+            };
+            let (uri_id, offset) = (reference.uri_id(), reference.offset().clone());
+            let NameRef::Resolved(resolved) = self.graph.names().get(reference.name_id()).unwrap() else {
+                continue;
+            };
+            let declaration_id = *resolved.declaration_id();
+
+            if self.graph.visibility(&declaration_id) != Some(Visibility::Private) {
+                continue;
+            }
+
+            // A reference can be resolved again without its document being re-indexed, which is what clears
+            // document diagnostics. Don't report the same reference twice
+            let already_reported = self.graph.documents().get(&uri_id).is_some_and(|document| {
+                document.diagnostics().iter().any(|diagnostic| {
+                    *diagnostic.rule() == Rule::PrivateConstantReference && *diagnostic.offset() == offset
+                })
+            });
+            if already_reported {
+                continue;
+            }
+
+            let name = self
+                .graph
+                .declarations()
+                .get(&declaration_id)
+                .unwrap()
+                .name()
+                .to_string();
+            let diagnostic = Diagnostic::new(
+                Rule::PrivateConstantReference,
+                uri_id,
+                offset,
+                format!("private constant `{name}` referenced with a constant path"),
+            );
+            self.graph.add_document_diagnostic(uri_id, diagnostic);
+        }
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -178,6 +233,15 @@ impl<'a> Resolver<'a> {
 
     /// Handles a unit of work for resolving a constant definition or singleton method
     fn handle_definition_unit(&mut self, unit_id: Unit, id: DefinitionId) {
+        if let Some(outcome) = self.resolve_conditional_definition(id) {
+            match outcome {
+                Outcome::Retry { .. } => self.unit_queue.push_back(unit_id),
+                Outcome::Resolved(_) => self.made_progress = true,
+                Outcome::Unresolved => {}
+            }
+            return;
+        }
+
         let mut needs_linearization = false;
 
         let outcome = match self.graph.definitions().get(&id).unwrap() {
@@ -255,6 +319,101 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// `X ||= value` is `defined?(X) ? X : (X = value)`: it only defines `X` when the lookup for `X` fails. When a
+    /// conditional definition's constant is already reachable from its scope and owned by some other namespace, the
+    /// definition doesn't create a declaration. It joins the existing one, which is also what its name resolves to.
+    ///
+    /// ```ruby
+    /// class Parent
+    ///   VERSION = "1"
+    /// end
+    ///
+    /// class Child < Parent
+    ///   VERSION ||= "2" # Parent::VERSION already exists, so this defines nothing
+    /// end
+    /// ```
+    ///
+    /// Returns `None` when the definition should be handled like any other constant definition.
+    fn resolve_conditional_definition(&mut self, id: DefinitionId) -> Option<Outcome> {
+        let name_id = match self.graph.definitions().get(&id).unwrap() {
+            Definition::Constant(it) if it.flags().is_conditional() => *it.name_id(),
+            Definition::ConstantAlias(it) if it.flags().is_conditional() => *it.name_id(),
+            _ => return None,
+        };
+
+        let existing_id = match self.lookup_existing_constant(name_id) {
+            Outcome::Resolved(existing_id) => existing_id,
+            // The lookup may still succeed once more ancestors are known. Wait for them once, then give up and treat
+            // this as a plain definition
+            Outcome::Retry { .. } if self.deferred_conditionals.insert(id) => {
+                return Some(Outcome::Retry {
+                    partial_ancestors: true,
+                });
+            }
+            _ => return None,
+        };
+
+        let Outcome::Resolved(owner_id) = self.name_owner_id(name_id, false) else {
+            return None;
+        };
+
+        let existing = self.graph.declarations().get(&existing_id).unwrap();
+        if *existing.owner_id() == owner_id
+            || !matches!(existing, Declaration::Constant(_) | Declaration::ConstantAlias(_))
+        {
+            return None;
+        }
+
+        // Ruby runs `defined?` when the `||=` executes. If every definition of the existing constant comes later in
+        // the same file, it doesn't exist yet at that point and the `||=` does define a new constant. Definitions in
+        // other files may have been loaded first
+        let definition = self.graph.definitions().get(&id).unwrap();
+        let (uri_id, start) = (*definition.uri_id(), definition.offset().start());
+        let defined_before = existing.definitions().iter().any(|existing_definition_id| {
+            let existing_definition = self.graph.definitions().get(existing_definition_id).unwrap();
+            *existing_definition.uri_id() != uri_id || existing_definition.offset().start() < start
+        });
+        if !defined_before {
+            return None;
+        }
+
+        let existing_name = existing.name().to_string();
+        let existing_owner_id = *existing.owner_id();
+        // `add_declaration` deduplicates by fully qualified name, so this appends the definition to the existing
+        // declaration
+        self.graph.add_declaration(id, existing_name, |name| {
+            Declaration::Constant(Box::new(ConstantDeclaration::new(name, existing_owner_id)))
+        });
+        self.graph.record_resolved_name(name_id, existing_id);
+        Some(Outcome::Resolved(existing_id))
+    }
+
+    /// Looks a constant name up the way `defined?` does for the target of `||=`: lexically for a bare name, through
+    /// the parent scope's ancestors for a constant path
+    fn lookup_existing_constant(&mut self, name_id: NameId) -> Outcome {
+        let name = match self.graph.names().get(&name_id).unwrap() {
+            NameRef::Resolved(resolved) => return Outcome::Resolved(*resolved.declaration_id()),
+            NameRef::Unresolved(name) => name.as_ref().clone(),
+        };
+        let str_id = *name.str();
+
+        match name.parent_scope() {
+            ParentScope::None => self.run_resolution(&name),
+            ParentScope::TopLevel => self.search_ancestors(*OBJECT_ID, str_id),
+            ParentScope::Some(parent_scope_id) => {
+                let NameRef::Resolved(parent_scope) = self.graph.names().get(parent_scope_id).unwrap() else {
+                    return Outcome::Unresolved;
+                };
+
+                match self.resolve_to_namespace(*parent_scope.declaration_id()) {
+                    Some(namespace_id) => self.search_qualified(namespace_id, str_id),
+                    None => Outcome::Unresolved,
+                }
+            }
+            ParentScope::Attached(_) => Outcome::Unresolved,
+        }
+    }
+
     /// Clears and re-enqueues the ancestors of a declaration's singleton class and all of its higher-order singleton
     /// classes. A later class or module definition can change their parent hierarchy.
     fn relinearize_singleton_hierarchy(&mut self, declaration_id: DeclarationId) {
@@ -284,9 +443,17 @@ impl<'a> Resolver<'a> {
     fn handle_reference_unit(&mut self, unit_id: Unit, id: ConstantReferenceId) {
         let constant_ref = self.graph.constant_references().get(&id).unwrap();
 
+        let is_constant_path = matches!(
+            self.graph.names().get(constant_ref.name_id()).unwrap().parent_scope(),
+            ParentScope::Some(_) | ParentScope::TopLevel
+        );
+
         match self.resolve_constant_internal(*constant_ref.name_id()) {
             Outcome::Resolved(declaration_id) => {
                 self.graph.record_resolved_reference(id, declaration_id);
+                if is_constant_path {
+                    self.resolved_constant_paths.push(id);
+                }
                 self.made_progress = true;
             }
             Outcome::Retry { .. } => {
@@ -1058,7 +1225,15 @@ impl<'a> Resolver<'a> {
         // Collect prepends and includes for the current declaration, noting if any extends exist
         let mut has_extends = false;
 
-        for definition_id in declaration.definitions() {
+        // Built-in definitions stand for what the VM sets up before any code runs (e.g. `Object` including `Kernel`), so
+        // their mixins are applied first. Otherwise reopening `Object` to include a module would be applied before the
+        // built-in `include Kernel`, giving `[Object, Kernel, M]` instead of Ruby's `[Object, M, Kernel]`
+        let (built_in_definitions, definitions): (Vec<DefinitionId>, Vec<DefinitionId>) =
+            declaration.definitions().iter().partition(|definition_id| {
+                *self.graph.definitions().get(definition_id).unwrap().uri_id() == *BUILT_IN_URI_ID
+            });
+
+        for definition_id in built_in_definitions.iter().chain(&definitions) {
             for mixin in self.mixins_of(*definition_id) {
                 match mixin {
                     Mixin::Prepend(_) | Mixin::Include(_) => mixins.push(mixin.clone()),
@@ -1568,7 +1743,7 @@ impl<'a> Resolver<'a> {
                         Some(Declaration::Namespace(_)) => {
                             found_namespace = true;
 
-                            match self.search_ancestors(id, *name.str()) {
+                            match self.search_qualified(id, *name.str()) {
                                 Outcome::Resolved(declaration_id) => {
                                     self.graph.record_resolved_name(name_id, declaration_id);
                                     return Outcome::Resolved(declaration_id);
@@ -1664,9 +1839,18 @@ impl<'a> Resolver<'a> {
 
     fn run_resolution(&mut self, name: &Name) -> Outcome {
         let str_id = *name.str();
+        // The superclass of `class Foo < Foo` is evaluated before the new `Foo` exists, so it can't resolve to it
+        let excluded = if name.is_before_definition() {
+            match self.graph.names().get(&name.defined_name_id()) {
+                Some(NameRef::Resolved(defined)) => Some(*defined.declaration_id()),
+                _ => None,
+            }
+        } else {
+            None
+        };
 
         if let Some(nesting) = name.nesting() {
-            let scope_outcome = self.search_lexical_scopes(name, str_id);
+            let scope_outcome = self.search_lexical_scopes(name, str_id, excluded);
 
             // If we already resolved or need to retry, return early
             if scope_outcome.is_resolved_or_retry() {
@@ -1689,7 +1873,7 @@ impl<'a> Resolver<'a> {
                             }
                             Some(Declaration::Namespace(_)) => {
                                 decl_id = Some(id);
-                                result = self.search_ancestors(id, str_id);
+                                result = self.search_ancestors_from(id, str_id, false, excluded);
                                 break;
                             }
                             _ => {}
@@ -1726,7 +1910,7 @@ impl<'a> Resolver<'a> {
             );
 
             if is_module || chain_incomplete {
-                let object_outcome = self.search_ancestors(*OBJECT_ID, str_id);
+                let object_outcome = self.search_ancestors_from(*OBJECT_ID, str_id, false, excluded);
 
                 match object_outcome {
                     // Found the constant through Object's ancestors.
@@ -1744,11 +1928,63 @@ impl<'a> Resolver<'a> {
         // When there's no nesting, we're working at the top level of a script. The top level is the magic `<main>`
         // object, which is an instance of `Object`. To resolve constants at the top level, we need to search the
         // ancestors of `Object`
-        self.search_ancestors(*OBJECT_ID, str_id)
+        self.search_ancestors_from(*OBJECT_ID, str_id, false, excluded)
+    }
+
+    /// Search for a member in a declaration's ancestor chain, as a bare constant reference does.
+    fn search_ancestors(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
+        self.search_ancestors_from(declaration_id, str_id, false, None)
+    }
+
+    /// Search for a member in a declaration's ancestor chain, as a qualified reference (`Foo::Bar`) does: if the first
+    /// owner found is `Object` itself and the search did not start at `Object`, the constant is not found. This is the
+    /// `exclude` flag of the VM's `rb_const_search_from`. Constants owned by ancestors after `Object` (like `Kernel`)
+    /// are still found:
+    ///
+    /// ```ruby
+    /// TOP = 1
+    /// module Kernel; K = 2; end
+    /// class Foo; end
+    ///
+    /// Foo::TOP # NameError: uninitialized constant Foo::TOP
+    /// Foo::K   # => 2
+    /// ```
+    fn search_qualified(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
+        self.search_ancestors_from(declaration_id, str_id, declaration_id != *OBJECT_ID, None)
     }
 
     /// Search for a member in a declaration's ancestor chain.
-    fn search_ancestors(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
+    ///
+    /// The declaration's own members are checked first, even when modules are prepended to it. This matches
+    /// `rb_const_search_from`, which only skips a prepended class in favour of its origin after the first iteration:
+    ///
+    /// ```ruby
+    /// module P; X = 1; end
+    /// class C
+    ///   prepend P
+    ///   X = 2
+    /// end
+    ///
+    /// C::X # => 2, even though C.ancestors is [P, C, ...]
+    /// ```
+    fn search_ancestors_from(
+        &mut self,
+        declaration_id: DeclarationId,
+        str_id: StringId,
+        exclude_object: bool,
+        excluded: Option<DeclarationId>,
+    ) -> Outcome {
+        if let Some(id) = self
+            .graph
+            .declarations()
+            .get(&declaration_id)
+            .and_then(|declaration| declaration.as_namespace())
+            .and_then(|namespace| namespace.member(&str_id))
+            .filter(|id| Some(**id) != excluded)
+        {
+            return Outcome::Resolved(*id);
+        }
+
         match self.linearize_ancestors(declaration_id) {
             Ancestors::Complete(ids) | Ancestors::Cyclic(ids) => ids
                 .iter()
@@ -1761,7 +1997,14 @@ impl<'a> Resolver<'a> {
                             .as_namespace()
                             .unwrap()
                             .member(&str_id)
-                            .map(|id| Outcome::Resolved(*id))
+                            .filter(|id| Some(**id) != excluded)
+                            .map(|id| {
+                                if exclude_object && *ancestor_id == *OBJECT_ID {
+                                    Outcome::Unresolved
+                                } else {
+                                    Outcome::Resolved(*id)
+                                }
+                            })
                     } else {
                         None
                     }
@@ -1788,7 +2031,12 @@ impl<'a> Resolver<'a> {
                                 .as_namespace()
                                 .unwrap()
                                 .member(&str_id)
+                                .filter(|id| Some(**id) != excluded)
                             {
+                                if exclude_object && ancestor_id == *OBJECT_ID {
+                                    return Outcome::Unresolved;
+                                }
+
                                 return Outcome::Resolved(*id);
                             }
                         }
@@ -1802,7 +2050,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// Look for the constant in the lexical scopes that are a part of its nesting
-    fn search_lexical_scopes(&self, name: &Name, str_id: StringId) -> Outcome {
+    fn search_lexical_scopes(&self, name: &Name, str_id: StringId, excluded: Option<DeclarationId>) -> Outcome {
         let mut current_name = name;
 
         while let Some(nesting_id) = current_name.nesting() {
@@ -1812,6 +2060,7 @@ impl<'a> Resolver<'a> {
                 if let Some(namespace_id) = self.resolve_to_namespace(declaration_id)
                     && let Some(namespace) = self.graph.declarations().get(&namespace_id).unwrap().as_namespace()
                     && let Some(member) = namespace.member(&str_id)
+                    && Some(*member) != excluded
                 {
                     return Outcome::Resolved(*member);
                 }

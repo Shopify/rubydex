@@ -148,6 +148,211 @@ mod constant_resolution_tests {
         assert_no_members!(context, "Bar::Baz");
         assert_owner_eq!(context, "Bar::Baz", "Bar");
     }
+
+    #[test]
+    fn qualified_reference_does_not_find_constants_owned_by_object() {
+        let mut context = graph_test();
+        // `Foo::TOP` raises NameError in Ruby: a qualified search stops when the first owner it finds is Object itself,
+        // unless the search started at Object. Owners after Object in the chain, like Kernel, are still found
+        context.index_uri("file:///foo.rb", {
+            r"
+            TOP = 1
+
+            module Kernel
+              KERNEL_CONST = 2
+            end
+
+            class Foo; end
+
+            Foo::TOP
+            Foo::Foo
+            Foo::KERNEL_CONST
+            Object::TOP
+            ::TOP
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_unresolved!(context, "TOP", "file:///foo.rb:9:6-9:9");
+        assert_constant_reference_unresolved!(context, "Foo", "file:///foo.rb:10:6-10:9");
+        assert_constant_reference_to!(context, "Kernel::KERNEL_CONST", "file:///foo.rb:11:6-11:18");
+        assert_constant_reference_to!(context, "TOP", "file:///foo.rb:12:9-12:12");
+        assert_constant_reference_to!(context, "TOP", "file:///foo.rb:13:3-13:6");
+    }
+
+    #[test]
+    fn qualified_reference_stops_at_object_even_if_a_later_ancestor_has_the_constant() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Kernel
+              DUP = 1
+            end
+
+            class Object
+              DUP = 2
+            end
+
+            class Foo; end
+
+            Foo::DUP
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_unresolved!(context, "DUP", "file:///foo.rb:11:6-11:9");
+    }
+
+    #[test]
+    fn qualified_reference_through_a_top_level_constant_does_not_resolve() {
+        let mut context = graph_test();
+        // `Foo::Bar` is a NameError, so nothing after it can resolve either
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+
+            class Bar
+              Baz = 1
+            end
+
+            ObjectAlias = Object
+
+            Foo::Bar::Baz
+            ObjectAlias::Bar::Baz
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_unresolved!(context, "Bar", "file:///foo.rb:9:6-9:9");
+        assert_constant_reference_unresolved!(context, "Baz", "file:///foo.rb:9:11-9:14");
+        assert_constant_reference_to!(context, "Bar::Baz", "file:///foo.rb:10:19-10:22");
+    }
+
+    #[test]
+    fn or_assign_does_not_define_a_constant_that_is_already_reachable() {
+        let mut context = graph_test();
+        // `X ||= value` is `defined?(X) ? X : (X = value)`, so it only defines X when the lookup for X fails
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Parent
+              VERSION = 1
+              WIDTH = 1
+            end
+
+            class Child < Parent
+              VERSION ||= 2
+              VERSION
+            end
+
+            Child::VERSION
+            Child::WIDTH ||= 2
+
+            TOP = 1
+            module Bar
+              TOP ||= 2
+              TOP
+            end
+
+            module Fresh
+              FRESH ||= 1
+            end
+
+            module Early
+              LATER ||= 1
+            end
+            LATER = 2
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_declaration_does_not_exist!(context, "Child::VERSION");
+        assert_declaration_does_not_exist!(context, "Child::WIDTH");
+        assert_declaration_does_not_exist!(context, "Bar::TOP");
+        assert_declaration_exists!(context, "Fresh::FRESH");
+        // The top level LATER is only defined after the `||=` runs
+        assert_declaration_exists!(context, "Early::LATER");
+
+        assert_constant_reference_to!(context, "Parent::VERSION", "file:///foo.rb:7:3-7:10");
+        assert_constant_reference_to!(context, "Parent::VERSION", "file:///foo.rb:11:8-11:15");
+        assert_constant_reference_to!(context, "TOP", "file:///foo.rb:17:3-17:6");
+    }
+
+    #[test]
+    fn or_assign_through_a_constant_path_defines_the_constant_when_missing() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            TOP = 1
+            class Foo; end
+
+            Foo::TOP ||= 2
+            Foo::NEW ||= 3
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        // A qualified lookup doesn't see Object's own constants, so `Foo::TOP ||=` defines Foo::TOP
+        assert_declaration_exists!(context, "Foo::TOP");
+        assert_declaration_exists!(context, "Foo::NEW");
+    }
+
+    #[test]
+    fn self_constant_path_in_a_namespace_body() {
+        let mut context = graph_test();
+        // Directly in a class, module or singleton class body, `self` is that namespace. In a method or a block it
+        // depends on the receiver, so those stay dynamic
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Parent
+              INHERITED = 1
+            end
+
+            class Foo < Parent
+              OWN = 1
+
+              self::OWN
+              self::INHERITED
+
+              class << self
+                SINGLETON = 1
+                self::SINGLETON
+              end
+
+              def bar
+                self::OWN
+              end
+
+              each do
+                self::OWN
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "DynamicConstantReference: Dynamic constant reference (17:5-17:9)",
+                "DynamicConstantReference: Dynamic constant reference (21:5-21:9)",
+            ],
+            &[Rule::ParseWarning]
+        );
+
+        assert_constant_reference_to!(context, "Foo::OWN", "file:///foo.rb:8:9-8:12");
+        assert_constant_reference_to!(context, "Parent::INHERITED", "file:///foo.rb:9:9-9:18");
+        assert_constant_reference_to!(context, "Foo::<Foo>::SINGLETON", "file:///foo.rb:13:11-13:20");
+    }
 }
 
 mod constant_alias_tests {
@@ -976,6 +1181,48 @@ mod constant_alias_tests {
         assert_declaration_exists!(context, "Foo#initialize()");
         assert_declaration_exists!(context, "Foo#new_bar()");
     }
+
+    #[test]
+    fn reassigned_alias_uses_the_last_assignment() {
+        let mut context = graph_test();
+        // Reassigning a constant replaces its value, and `||=` only assigns when nothing was assigned before
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A
+              C = 1
+            end
+
+            module B
+              C = 2
+            end
+
+            X = A
+            X = B
+            X::C
+
+            Y ||= A
+            Y = B
+            Y::C
+
+            Z = A
+            Z ||= B
+            Z::C
+
+            module X
+              NEW = 1
+            end
+            B::NEW
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_to!(context, "B::C", "file:///foo.rb:11:4-11:5");
+        assert_constant_reference_to!(context, "B::C", "file:///foo.rb:15:4-15:5");
+        assert_constant_reference_to!(context, "A::C", "file:///foo.rb:19:4-19:5");
+        assert_constant_reference_to!(context, "B::NEW", "file:///foo.rb:24:4-24:7");
+    }
 }
 
 mod superclass_tests {
@@ -1184,6 +1431,69 @@ mod superclass_tests {
                 .ancestors(),
             Ancestors::Partial(_)
         ));
+    }
+
+    #[test]
+    fn superclass_with_the_same_name_as_the_class_resolves_outside_it() {
+        let mut context = graph_test();
+        // The superclass is evaluated before `class` creates the new constant, so `ApplicationRecord` can't be
+        // `GSD::ApplicationRecord` itself (https://github.com/Shopify/rubydex/issues/1073)
+        context.index_uri("file:///foo.rb", {
+            r"
+            class ApplicationRecord
+            end
+
+            module GSD
+              class ApplicationRecord < ApplicationRecord
+              end
+
+              ApplicationRecord
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_constant_reference_to!(context, "ApplicationRecord", "file:///foo.rb:5:29-5:46");
+        assert_constant_reference_to!(context, "GSD::ApplicationRecord", "file:///foo.rb:8:3-8:20");
+        assert_ancestors_eq!(
+            context,
+            "GSD::ApplicationRecord",
+            [
+                "GSD::ApplicationRecord",
+                "ApplicationRecord",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn superclass_with_the_same_name_as_the_class_still_searches_the_enclosing_namespace_ancestors() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Base
+              class Model; end
+            end
+
+            class Model; end
+
+            module App
+              include Base
+
+              class Model < Model
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_constant_reference_to!(context, "Base::Model", "file:///foo.rb:10:17-10:22");
     }
 }
 
@@ -1531,6 +1841,41 @@ mod include_tests {
             "C should have a partial chain: the `Missing` include never resolves"
         );
     }
+
+    #[test]
+    fn top_level_include_includes_into_object() {
+        let mut context = graph_test();
+        // `include` at the top level is `main.include`, which includes the module into Object
+        context.index_uri("file:///foo.rb", {
+            r"
+            module M
+              MX = 1
+            end
+
+            include M
+
+            class Foo
+              MX
+            end
+
+            module Bar
+              MX
+            end
+
+            Foo::MX
+            MX
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_to!(context, "M", "file:///foo.rb:5:9-5:10");
+        assert_constant_reference_to!(context, "M::MX", "file:///foo.rb:8:3-8:5");
+        assert_constant_reference_to!(context, "M::MX", "file:///foo.rb:12:3-12:5");
+        assert_constant_reference_to!(context, "M::MX", "file:///foo.rb:15:6-15:8");
+        assert_constant_reference_to!(context, "M::MX", "file:///foo.rb:16:1-16:3");
+    }
 }
 
 mod prepend_tests {
@@ -1845,6 +2190,72 @@ mod prepend_tests {
 
         assert_no_members!(context, "Foo::Bar::Qux");
         assert_owner_eq!(context, "Foo::Bar::Qux", "Foo::Bar");
+    }
+
+    #[test]
+    fn qualified_reference_checks_prepended_namespace_own_members_first() {
+        let mut context = graph_test();
+        // CRuby reads the start namespace's own constant table before its prepended modules. Only later steps of
+        // the walk skip a prepended class in favour of its origin, so `C::X` is `C::X` while `D::X` is `P::X`
+        context.index_uri("file:///foo.rb", {
+            r"
+            module P
+              X = 1
+            end
+
+            class C
+              prepend P
+              X = 2
+            end
+
+            class D < C; end
+
+            C::X
+            D::X
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_to!(context, "C::X", "file:///foo.rb:12:4-12:5");
+        assert_constant_reference_to!(context, "P::X", "file:///foo.rb:13:4-13:5");
+    }
+
+    #[test]
+    fn object_fallback_checks_object_own_members_before_its_prepends() {
+        let mut context = graph_test();
+        // Top-level references and the module fallback both search from Object, so Object's own `X` wins over the
+        // `X` of a module prepended to it. A class starts from itself, so it reaches `PP::X` first
+        context.index_uri("file:///foo.rb", {
+            r"
+            module PP
+              X = 1
+            end
+
+            class Object
+              prepend PP
+              X = 2
+            end
+
+            module Mod
+              X
+            end
+
+            class Klass
+              X
+            end
+
+            ::X
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_to!(context, "X", "file:///foo.rb:11:3-11:4");
+        assert_constant_reference_to!(context, "PP::X", "file:///foo.rb:15:3-15:4");
+        assert_constant_reference_to!(context, "X", "file:///foo.rb:18:3-18:4");
     }
 }
 
@@ -2192,6 +2603,29 @@ mod object_ancestors_tests {
         context.resolve();
 
         assert_constant_reference_to!(context, "Kernel::FOUND_ME", "file:///foo.rb:3:3-3:11");
+    }
+
+    #[test]
+    fn modules_included_into_reopened_object_come_before_kernel() {
+        let mut context = graph_test();
+        // The VM includes Kernel into Object before any code runs, so a later `include` lands in front of it
+        context.index_uri("file:///foo.rb", {
+            r"
+            module M; end
+            module N; end
+
+            class Object
+              include M
+            end
+
+            include N
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Object", ["Object", "N", "M", "Kernel", "BasicObject"]);
     }
 }
 
@@ -6066,5 +6500,76 @@ mod visibility_resolution_tests {
         assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
         assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
         assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+    }
+
+    #[test]
+    fn constant_path_to_private_constant_is_reported() {
+        let mut context = graph_test();
+        // Only `::` enforces `private_constant`. References from the lexical scope or through inheritance are fine,
+        // but a constant path raises even inside the class itself
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              PRIV = 1
+              private_constant :PRIV
+
+              PRIV
+              Foo::PRIV
+
+              class Inner
+                PRIV
+              end
+            end
+
+            class Sub < Foo
+              PRIV
+            end
+
+            Foo::PRIV
+            Sub::PRIV
+            "
+        });
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "PrivateConstantReference: private constant `Foo::PRIV` referenced with a constant path (6:8-6:12)",
+                "PrivateConstantReference: private constant `Foo::PRIV` referenced with a constant path (17:6-17:10)",
+                "PrivateConstantReference: private constant `Foo::PRIV` referenced with a constant path (18:6-18:10)",
+            ],
+            &[Rule::ParseWarning]
+        );
+
+        // The references still resolve, so navigation keeps working
+        assert_constant_reference_to!(context, "Foo::PRIV", "file:///foo.rb:17:6-17:10");
+        assert_constant_reference_to!(context, "Foo::PRIV", "file:///foo.rb:14:3-14:7");
+    }
+
+    #[test]
+    fn top_level_constant_path_to_private_constant_is_reported() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Object
+              TOP = 1
+              private_constant :TOP
+            end
+
+            TOP
+            ::TOP
+            Object::TOP
+            "
+        });
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "PrivateConstantReference: private constant `TOP` referenced with a constant path (7:3-7:6)",
+                "PrivateConstantReference: private constant `TOP` referenced with a constant path (8:9-8:12)",
+            ],
+            &[Rule::ParseWarning]
+        );
     }
 }

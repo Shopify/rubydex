@@ -42,6 +42,8 @@ bitflags! {
         const DEPRECATED = 0b0001;
         const PROMOTABLE = 0b0010;
         const SINGLETON_METHOD_VISIBILITY = 0b0100;
+        /// Defined with `||=`: only takes effect when the constant isn't already reachable from that scope
+        const CONDITIONAL = 0b1000;
     }
 }
 assert_mem_size!(DefinitionFlags, 1);
@@ -60,6 +62,11 @@ impl DefinitionFlags {
     #[must_use]
     pub fn is_singleton_method_visibility(&self) -> bool {
         self.contains(Self::SINGLETON_METHOD_VISIBILITY)
+    }
+
+    #[must_use]
+    pub fn is_conditional(&self) -> bool {
+        self.contains(Self::CONDITIONAL)
     }
 }
 
