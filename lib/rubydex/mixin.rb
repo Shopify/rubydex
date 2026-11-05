@@ -5,9 +5,13 @@ module Rubydex
     #: ConstantReference
     attr_reader :constant_reference
 
-    #: (ConstantReference) -> void
-    def initialize(constant_reference)
+    #: Location
+    attr_reader :location
+
+    #: (ConstantReference, Location) -> void
+    def initialize(constant_reference, location)
       @constant_reference = constant_reference
+      @location = location
     end
   end
 
