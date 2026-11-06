@@ -1392,7 +1392,10 @@ impl CommentGroup {
     }
 
     fn add_comment(&mut self, comment: &ruby_prism::Comment) {
-        self.end_offset = comment.location().end() as usize;
+        // An embedded document's location includes the newline after `=end`, which a `#` comment's does not
+        let location = comment.location();
+        let trailing = location.as_slice().iter().rev().take_while(|&&b| b == b'\n' || b == b'\r').count();
+        self.end_offset = location.end() as usize - trailing;
         let text = String::from_utf8_lossy(comment.location().as_slice()).to_string();
         if text.lines().any(|line| line.starts_with("# @deprecated")) {
             self.deprecated = true;
