@@ -4377,6 +4377,48 @@ mod comment_tests {
     }
 
     #[test]
+    fn index_embedded_documents_attached_to_definitions() {
+        let context = index_source({
+            "
+            =begin
+            Embedded document
+            =end
+            class Embedded; end
+
+            =begin
+            Embedded with blank line
+            =end
+
+            class EmbeddedBlankLine; end
+
+            =begin
+            Too far away
+            =end
+
+
+            class EmbeddedTooFar; end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:1-4:20", Class, |def| {
+            assert_def_name_eq!(&context, def, "Embedded");
+            assert_def_comments_eq!(&context, def, ["=begin\nEmbedded document\n=end"]);
+        });
+
+        assert_definition_at!(&context, "10:1-10:29", Class, |def| {
+            assert_def_name_eq!(&context, def, "EmbeddedBlankLine");
+            assert_def_comments_eq!(&context, def, ["=begin\nEmbedded with blank line\n=end"]);
+        });
+
+        assert_definition_at!(&context, "17:1-17:26", Class, |def| {
+            assert_def_name_eq!(&context, def, "EmbeddedTooFar");
+            assert!(def.comments().is_empty());
+        });
+    }
+
+    #[test]
     fn index_comments_indented_and_nested() {
         let context = index_source({
             "
