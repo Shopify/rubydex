@@ -630,11 +630,10 @@ impl<'a> Resolver<'a> {
                     let constant_name = self.graph.strings().get(&target).unwrap().as_str().to_string();
 
                     let owner_id = if let Some(receiver_name_id) = receiver {
-                        let NameRef::Resolved(resolved_receiver) = self.graph.names().get(&receiver_name_id).unwrap()
-                        else {
+                        let Some(receiver_decl_id) = self.resolve_constant_receiver(receiver_name_id, id) else {
                             continue;
                         };
-                        let Some(namespace_id) = self.resolve_to_namespace(*resolved_receiver.declaration_id()) else {
+                        let Some(namespace_id) = self.resolve_to_namespace(receiver_decl_id) else {
                             continue;
                         };
                         namespace_id

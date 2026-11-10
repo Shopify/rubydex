@@ -5895,6 +5895,32 @@ mod visibility_resolution_tests {
     }
 
     #[test]
+    fn retroactive_constant_visibility_resolves_when_receiver_discovered_incrementally() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///vis.rb",
+            r"
+            Foo.private_constant :BAR
+            ",
+        );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
+        context.resolve();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              BAR = 1
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo::BAR", Visibility::Private);
+    }
+
+    #[test]
     fn retroactive_singleton_method_visibility_on_direct_member() {
         let mut context = graph_test();
         context.index_uri(
