@@ -902,7 +902,7 @@ mod tests {
             ids::StringId,
             name::{Name, ParentScope},
         },
-        test_utils::GraphTest,
+        test_utils::{GraphTest, OrderDependence, Perturbation},
     };
 
     macro_rules! assert_results_eq {
@@ -1020,6 +1020,7 @@ mod tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_results_eq!(context, "#is_a?()", &MatchMode::Exact, ["Bar#is_a?()"]);
     }
@@ -1055,6 +1056,7 @@ mod tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_results_eq!(context, "#Is_A?()", &MatchMode::Exact, Vec::<&str>::new());
@@ -1244,6 +1246,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         let name_id = Name::new(
@@ -1299,6 +1302,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         let name_id = Name::new(
@@ -1354,6 +1358,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Ties, OrderDependence::CycleEntryPoint);
         context.resolve();
 
         let name_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
@@ -1403,6 +1408,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         let foo_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
@@ -1719,6 +1725,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_completion_eq!(
@@ -1760,6 +1767,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_completion_eq!(
@@ -1844,6 +1852,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_completion_eq!(
@@ -1879,6 +1888,7 @@ mod tests {
             Alias2 = Alias1
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_completion_eq!(
@@ -2010,6 +2020,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_completion_eq!(
@@ -2038,6 +2049,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_completion_eq!(
@@ -2098,6 +2110,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_completion_eq!(
@@ -2588,6 +2601,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         let name_id = Name::new(
@@ -2640,6 +2654,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         let name_id = Name::new(context.graph().names(), StringId::from("Bar"), ParentScope::None, None).id();
@@ -2683,6 +2698,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         let name_id = Name::new(context.graph().names(), StringId::from("Bar"), ParentScope::None, None).id();
@@ -2728,6 +2744,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         let name_id = Name::new(context.graph().names(), StringId::from("Bar"), ParentScope::None, None).id();
@@ -2945,6 +2962,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         let bar_id = Name::new(context.graph().names(), StringId::from("Bar"), ParentScope::None, None).id();
@@ -3036,6 +3054,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         let foo_ref_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
@@ -3126,6 +3145,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         let name_id = Name::new(
@@ -3175,6 +3195,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         let name_id = Name::new(context.graph().names(), StringId::from("Bar"), ParentScope::None, None).id();
@@ -3248,6 +3269,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         let foo_name_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
@@ -3312,6 +3334,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         // Caller's self is `Account` (or any descendant). Both caller and receiver descend from
@@ -3444,6 +3467,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_completion_eq!(
@@ -3504,6 +3528,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_completion_eq!(
@@ -3556,6 +3581,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_completion_eq!(
@@ -3757,6 +3783,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_alias_target!(&context, "Child#aliased()", "Parent#inherited_m()");
@@ -3777,6 +3804,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_alias_target!(&context, "Bar#new_to_s()", "Bar#to_s()");
@@ -3973,6 +4001,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_eq!(
@@ -4089,6 +4118,7 @@ mod tests {
             USED_CONSTANT
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_dead_code_candidates!(context, []);
@@ -4128,6 +4158,7 @@ mod tests {
             AliasName = Target
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         // `AliasName` is itself dead, but it still references `Target`, giving `Target` a non-zero count.
@@ -4169,6 +4200,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_dead_code_candidates!(context, ["Unused"]);

@@ -1,11 +1,15 @@
 mod context;
 mod graph_test;
 mod local_graph_test;
+#[cfg(test)]
+mod order_independence;
 
 pub use context::Context;
 pub use context::with_context;
 pub use graph_test::GraphTest;
 pub use local_graph_test::LocalGraphTest;
+#[cfg(test)]
+pub use order_independence::{OrderDependence, Perturbation};
 
 #[must_use]
 pub fn normalize_indentation(input: &str) -> String {

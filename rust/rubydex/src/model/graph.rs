@@ -1563,7 +1563,7 @@ mod tests {
     use super::*;
     use crate::model::comment::Comment;
     use crate::model::declaration::Ancestors;
-    use crate::test_utils::GraphTest;
+    use crate::test_utils::{GraphTest, OrderDependence, Perturbation};
     use crate::{
         assert_declaration_does_not_exist, assert_declaration_kind_eq, assert_dependents, assert_descendants,
         assert_members_eq, assert_no_diagnostics, assert_no_members,
@@ -1615,6 +1615,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Ties, OrderDependence::DefinitionOrder);
         context.resolve();
 
         // The declaration stays a non-namespace constant alias.
@@ -1740,6 +1741,7 @@ mod tests {
             BAZ
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_eq!(context.graph().documents.len(), 3);
@@ -1771,6 +1773,7 @@ mod tests {
         context.index_uri("file:///b.rb", "class Foo; end");
         context.index_uri("file:///c.rb", "module Bar; end");
         context.index_uri("file:///d.rb", "class Baz < Foo; end");
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         let foo_declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
@@ -1840,6 +1843,7 @@ mod tests {
         context.index_uri("file:///foo.rb", "module Foo; end");
         context.index_uri("file:///foo2.rb", "module Foo; end");
         context.index_uri("file:///foo3.rb", "Foo");
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_eq!(context.graph().names().len(), 7);
@@ -1900,6 +1904,7 @@ mod tests {
 
         context.index_uri("file:///foo.rb", "module Foo; end");
         context.index_uri("file:///bar.rb", "Foo");
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_eq!(context.graph().names().len(), 7);
@@ -2451,6 +2456,7 @@ mod tests {
             Alias2 = Alias1
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         let target = context.graph().resolve_alias(&DeclarationId::from("Alias2"));
@@ -2470,6 +2476,7 @@ mod tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_eq!(context.graph().resolve_alias(&DeclarationId::from("Foo::A")), None);
@@ -2492,6 +2499,7 @@ mod tests {
 
         context.index_uri("file:///foo.rb", "module Foo; end\nBar");
         context.index_uri("file:///bar.rb", "module Bar; end");
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         // Bar declaration should have 1 reference (from foo.rb)
@@ -2532,7 +2540,7 @@ mod tests {
 mod incremental_resolution_tests {
     use crate::model::ids::DeclarationId;
     use crate::model::name::NameRef;
-    use crate::test_utils::GraphTest;
+    use crate::test_utils::{GraphTest, OrderDependence, Perturbation};
     use crate::{
         assert_alias_targets_contain, assert_ancestors_eq, assert_constant_reference_to,
         assert_constant_reference_unresolved, assert_declaration_does_not_exist, assert_declaration_exists,
@@ -2611,6 +2619,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_constant_reference_to!(context, "Foo::Bar", "file:///qux.rb:5:17-5:20");
@@ -2678,6 +2687,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:6:3-6:8");
@@ -2721,6 +2731,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_alias_targets_contain!(context, "Bar::ALIAS_CONST", "Foo::CONST");
@@ -2761,6 +2772,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_constant_reference_to!(context, "Foo::CONST", "file:///foo2.rb:5:3-5:8");
@@ -2806,6 +2818,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_constant_reference_to!(context, "A::DEEP_CONST", "file:///a.rb:12:3-12:13");
@@ -2854,6 +2867,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         // Baz in `class Baz::Zip` resolves to Foo::Bar::Baz (via inheritance),
@@ -2884,6 +2898,7 @@ mod incremental_resolution_tests {
 
         context.index_uri("file:///foo.rb", "class Foo; end");
         context.index_uri("file:///bar.rb", "class Bar; end");
+        context.order_dependent(Perturbation::Full, OrderDependence::StaleAncestors);
         context.resolve();
 
         assert_ancestors_eq!(context, "Foo", ["Foo", "Object", "Kernel", "BasicObject"]);
@@ -2934,6 +2949,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_constant_reference_to!(context, "M::CONST", "file:///a.rb:3:3-3:8");
@@ -2973,6 +2989,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_exists!(context, "Helpers");
@@ -3020,6 +3037,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object", "Kernel", "BasicObject"]);
@@ -3099,6 +3117,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_ancestors_eq!(context, "Foo", ["Foo", "M2", "M1", "Object", "Kernel", "BasicObject"]);
@@ -3138,6 +3157,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:4:5-4:10");
@@ -3186,6 +3206,7 @@ mod incremental_resolution_tests {
                 end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_exists!(context, "Foo");
@@ -3233,6 +3254,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_constant_reference_to!(context, "Foo::CONST", "file:///foo2.rb:4:3-4:8");
@@ -3281,6 +3303,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:3:3-3:8");
@@ -3321,6 +3344,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:3:3-3:8");
@@ -3426,6 +3450,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_exists!(context, "Foo::Bar::Baz::Qux");
@@ -3461,6 +3486,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::StaleAncestors);
         context.resolve();
 
         // CONST is unresolved (Foo doesn't include Bar yet, CONST not found)
@@ -3503,6 +3529,7 @@ mod incremental_resolution_tests {
             ",
         );
 
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_exists!(context, "Foo::Bar");
@@ -3553,6 +3580,7 @@ mod incremental_resolution_tests {
             ",
         );
 
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_exists!(context, "Foo");
@@ -3605,6 +3633,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_ancestors_eq!(context, "Foo", ["Foo", "M1", "Object", "Kernel", "BasicObject"]);
@@ -3651,6 +3680,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object", "Kernel", "BasicObject"]);
@@ -3702,6 +3732,7 @@ mod incremental_resolution_tests {
             Foo::CONST
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_constant_reference_to!(context, "Bar::CONST", "file:///ref.rb:1:6-1:11");
@@ -3791,6 +3822,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::StaleAncestors);
         context.resolve();
 
         assert_ancestors_eq!(context, "Foo", ["Foo", "Object", "Kernel", "BasicObject"]);
@@ -3836,6 +3868,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        incremental.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         incremental.resolve();
 
         // Modify: switch include from Foo to Baz
@@ -3875,6 +3908,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        fresh.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         fresh.resolve();
 
         // Compare: both paths should produce identical resolved state
@@ -3917,6 +3951,7 @@ mod incremental_resolution_tests {
 
         context.index_uri("file:///foo.rb", "class Foo; end");
         context.index_uri("file:///bar.rb", "Foo.new");
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_exists!(context, "Foo");
@@ -3939,6 +3974,7 @@ mod incremental_resolution_tests {
         context.index_uri("file:///parent.rb", "module Parent; end");
         context.index_uri("file:///target.rb", "class Parent::Target; end");
         context.index_uri("file:///caller.rb", "class Parent::Caller; Parent::Target.new; end");
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_exists!(context, "Parent::Target");
@@ -3961,6 +3997,7 @@ mod incremental_resolution_tests {
         let mut incremental = GraphTest::new();
         incremental.index_uri("file:///foo.rb", "class Foo; end");
         incremental.index_uri("file:///singleton.rb", "class << Foo; def bar; end; end");
+        incremental.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         incremental.resolve();
         assert_declaration_exists!(incremental, "Foo::<Foo>");
         assert_declaration_exists!(incremental, "Foo::<Foo>#bar()");
@@ -3978,6 +4015,7 @@ mod incremental_resolution_tests {
         let mut fresh = GraphTest::new();
         fresh.index_uri("file:///foo.rb", "class Foo; end");
         fresh.index_uri("file:///singleton.rb", "class << Foo; def bar; end; end");
+        fresh.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         fresh.resolve();
 
         assert_declaration_ids_match(&incremental, &fresh);
@@ -3989,6 +4027,7 @@ mod incremental_resolution_tests {
         let mut incremental = GraphTest::new();
         incremental.index_uri("file:///foo.rb", "class Foo; end");
         incremental.index_uri("file:///singleton.rb", "def Foo.bar; end");
+        incremental.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         incremental.resolve();
         assert_declaration_exists!(incremental, "Foo::<Foo>#bar()");
 
@@ -4002,6 +4041,7 @@ mod incremental_resolution_tests {
         let mut fresh = GraphTest::new();
         fresh.index_uri("file:///foo.rb", "class Foo; end");
         fresh.index_uri("file:///singleton.rb", "def Foo.bar; end");
+        fresh.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         fresh.resolve();
 
         assert_declaration_ids_match(&incremental, &fresh);
@@ -4013,6 +4053,7 @@ mod incremental_resolution_tests {
         let mut incremental = GraphTest::new();
         incremental.index_uri("file:///foo.rb", "class Foo; end");
         incremental.index_uri("file:///singleton.rb", "def Foo.bar; @x = 1; end");
+        incremental.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         incremental.resolve();
         assert_declaration_exists!(incremental, "Foo::<Foo>#bar()");
         assert_declaration_exists!(incremental, "Foo::<Foo>#@x");
@@ -4028,6 +4069,7 @@ mod incremental_resolution_tests {
         let mut fresh = GraphTest::new();
         fresh.index_uri("file:///foo.rb", "class Foo; end");
         fresh.index_uri("file:///singleton.rb", "def Foo.bar; @x = 1; end");
+        fresh.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         fresh.resolve();
 
         assert_declaration_ids_match(&incremental, &fresh);
@@ -4040,6 +4082,7 @@ mod incremental_resolution_tests {
         let mut incremental = GraphTest::new();
         incremental.index_uri("file:///foo.rb", "class Foo; end");
         incremental.index_uri("file:///alias.rb", "Foo.alias_method :new_name, :old_name");
+        incremental.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         incremental.resolve();
         assert_declaration_exists!(incremental, "Foo#new_name()");
 
@@ -4053,6 +4096,7 @@ mod incremental_resolution_tests {
         let mut fresh = GraphTest::new();
         fresh.index_uri("file:///foo.rb", "class Foo; end");
         fresh.index_uri("file:///alias.rb", "Foo.alias_method :new_name, :old_name");
+        fresh.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         fresh.resolve();
 
         assert_declaration_ids_match(&incremental, &fresh);
@@ -4064,6 +4108,7 @@ mod incremental_resolution_tests {
         let mut incremental = GraphTest::new();
         incremental.index_uri("file:///foo.rb", "class Foo; end");
         incremental.index_uri("file:///singleton.rb", "class << Foo; def old; end; alias new old; end");
+        incremental.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         incremental.resolve();
         assert_declaration_exists!(incremental, "Foo::<Foo>#old()");
         assert_declaration_exists!(incremental, "Foo::<Foo>#new()");
@@ -4081,6 +4126,7 @@ mod incremental_resolution_tests {
         let mut fresh = GraphTest::new();
         fresh.index_uri("file:///foo.rb", "class Foo; end");
         fresh.index_uri("file:///singleton.rb", "class << Foo; def old; end; alias new old; end");
+        fresh.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         fresh.resolve();
 
         assert_declaration_ids_match(&incremental, &fresh);
@@ -4092,6 +4138,7 @@ mod incremental_resolution_tests {
         let mut incremental = GraphTest::new();
         incremental.index_uri("file:///foo.rb", "class Foo; end");
         incremental.index_uri("file:///singleton.rb", "class << Foo; @bar = 1; end");
+        incremental.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         incremental.resolve();
         assert_declaration_exists!(incremental, "Foo::<Foo>::<<Foo>>#@bar");
 
@@ -4106,6 +4153,7 @@ mod incremental_resolution_tests {
         let mut fresh = GraphTest::new();
         fresh.index_uri("file:///foo.rb", "class Foo; end");
         fresh.index_uri("file:///singleton.rb", "class << Foo; @bar = 1; end");
+        fresh.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         fresh.resolve();
 
         assert_declaration_ids_match(&incremental, &fresh);
@@ -4143,6 +4191,7 @@ mod incremental_resolution_tests {
         context.index_uri("file:///foo.rb", foo_v1);
         context.index_uri("file:///bar.rb", "class Bar < Foo; end");
         context.index_uri("file:///baz.rb", "Bar.new");
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_exists!(context, "Foo");
@@ -4173,6 +4222,7 @@ mod incremental_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         context.delete_uri("file:///a.rb");

@@ -1,7 +1,7 @@
 use super::schema::RelType;
 use super::{render, run_query};
 use crate::model::graph::Graph;
-use crate::test_utils::GraphTest;
+use crate::test_utils::{GraphTest, OrderDependence, Perturbation};
 use cypher_parser::{CypherValue, OutputFormat, ResultSet, execute, parse};
 
 #[test]
@@ -41,6 +41,7 @@ fn fixture_graph() -> Graph {
             end
         ",
     );
+    context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
     context.resolve();
     context.into_graph()
 }

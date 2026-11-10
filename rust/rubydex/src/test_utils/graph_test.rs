@@ -1,5 +1,7 @@
 use super::normalize_indentation;
 #[cfg(test)]
+use super::order_independence::{self, OrderDependence, Perturbation, Rng};
+#[cfg(test)]
 use crate::diagnostic::Rule;
 use crate::indexing::{self, IndexerBackend, LanguageId};
 use crate::model::graph::{Graph, NameDependent};
@@ -9,6 +11,23 @@ use crate::resolution::Resolver;
 pub struct GraphTest {
     graph: Graph,
     backend: IndexerBackend,
+    /// Everything done to the graph so far, replayed on a fresh graph to resolve the same input in other unit orders
+    #[cfg(test)]
+    steps: Vec<Step>,
+    /// The first perturbation level known to change the result of this fixture, and why
+    #[cfg(test)]
+    order_dependence: Option<(Perturbation, OrderDependence)>,
+    /// Whether some resolve did change under the known level, so that a stale record is reported when the test ends
+    #[cfg(test)]
+    order_dependence_seen: bool,
+}
+
+#[cfg(test)]
+enum Step {
+    IndexRuby(String, String),
+    IndexRbs(String, String),
+    Delete(String),
+    Resolve,
 }
 
 impl Default for GraphTest {
@@ -28,6 +47,12 @@ impl GraphTest {
         Self {
             graph: Graph::new(),
             backend,
+            #[cfg(test)]
+            steps: Vec::new(),
+            #[cfg(test)]
+            order_dependence: None,
+            #[cfg(test)]
+            order_dependence_seen: false,
         }
     }
 
@@ -37,12 +62,14 @@ impl GraphTest {
     }
 
     #[must_use]
-    pub fn into_graph(self) -> Graph {
-        self.graph
+    pub fn into_graph(mut self) -> Graph {
+        std::mem::take(&mut self.graph)
     }
 
     /// Indexes a Ruby source
     pub fn index_uri(&mut self, uri: &str, source: &str) {
+        #[cfg(test)]
+        self.steps.push(Step::IndexRuby(uri.to_string(), source.to_string()));
         let source = normalize_indentation(source);
         let local_graph = indexing::build_local_graph(uri.into(), &source, &LanguageId::Ruby, self.backend);
         self.graph.consume_document_changes(local_graph);
@@ -50,17 +77,94 @@ impl GraphTest {
 
     /// Indexes an RBS source
     pub fn index_rbs_uri(&mut self, uri: &str, source: &str) {
+        #[cfg(test)]
+        self.steps.push(Step::IndexRbs(uri.to_string(), source.to_string()));
         let source = normalize_indentation(source);
         indexing::index_source(&mut self.graph, uri.into(), &source, &LanguageId::Rbs);
     }
 
     pub fn delete_uri(&mut self, uri: &str) {
+        #[cfg(test)]
+        self.steps.push(Step::Delete(uri.to_string()));
         self.graph.delete_document(uri);
     }
 
+    /// Resolves the graph. In tests, also resolves the same input again with the units in other orders and panics if
+    /// any result differs, unless the fixture recorded that difference with [`GraphTest::order_dependent`]
     pub fn resolve(&mut self) {
         let mut resolver = Resolver::new(&mut self.graph);
         resolver.resolve();
+
+        #[cfg(test)]
+        {
+            self.steps.push(Step::Resolve);
+            self.check_order_independence();
+        }
+    }
+
+    /// Records that this fixture resolves differently once units are reordered under `fails_from`, for `reason`. Lower
+    /// levels are still checked, and the test fails if `fails_from` stops changing the result, so that the record is
+    /// removed or raised when the ordering assumption is fixed. Must be called before resolving.
+    #[cfg(test)]
+    pub fn order_dependent(&mut self, fails_from: Perturbation, reason: OrderDependence) {
+        self.order_dependence = Some((fails_from, reason));
+    }
+
+    #[cfg(test)]
+    fn check_order_independence(&mut self) {
+        let expected = order_independence::snapshot(&self.graph);
+        let fails_from = self.order_dependence.map(|(level, _)| level);
+        let resolve_count = self.steps.iter().filter(|step| matches!(step, Step::Resolve)).count();
+
+        for level in Perturbation::ALL {
+            if fails_from.is_some_and(|fails_from| level > fails_from) {
+                return;
+            }
+
+            let mismatch = (0..order_independence::SEEDS).find_map(|seed| {
+                let actual = order_independence::snapshot(&self.replay(level, seed));
+                (actual != expected).then(|| (seed, order_independence::diff(&expected, &actual)))
+            });
+
+            let Some((seed, diff)) = mismatch else {
+                continue;
+            };
+
+            if fails_from == Some(level) {
+                self.order_dependence_seen = true;
+                return;
+            }
+
+            panic!(
+                "resolve #{resolve_count} gives a different graph when units are reordered under \
+                 `Perturbation::{level:?}` (seed {seed}). Remove the ordering assumption or record it with \
+                 `order_dependent(Perturbation::{level:?}, OrderDependence::...)` before resolving \
+                 (see docs/resolution-fixed-point.md).\n\
+                 - default order\n\
+                 + reordered\n\
+                 {diff}"
+            );
+        }
+    }
+
+    /// Runs every step again on a fresh graph, reordering the units of each resolve under `level`
+    #[cfg(test)]
+    fn replay(&self, level: Perturbation, seed: u64) -> Graph {
+        let mut replay = GraphTest::new_with_backend(self.backend);
+        let mut rng = Rng::new(seed);
+
+        for step in &self.steps {
+            match step {
+                Step::IndexRuby(uri, source) => replay.index_uri(uri, source),
+                Step::IndexRbs(uri, source) => replay.index_rbs_uri(uri, source),
+                Step::Delete(uri) => replay.delete_uri(uri),
+                Step::Resolve => Resolver::new(&mut replay.graph).resolve_reordered(|graph, queue, others| {
+                    order_independence::reorder(graph, queue, others, level, &mut rng);
+                }),
+            }
+        }
+
+        replay.into_graph()
     }
 
     // Name dependents helpers (shared with LocalGraphTest for assert_dependents! macro)
@@ -161,6 +265,22 @@ impl GraphTest {
                 d.formatted(document)
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+impl Drop for GraphTest {
+    fn drop(&mut self) {
+        if let Some((fails_from, reason)) = self.order_dependence
+            && !self.order_dependence_seen
+            && !std::thread::panicking()
+        {
+            panic!(
+                "recorded as `order_dependent(Perturbation::{fails_from:?}, OrderDependence::{reason:?})`, but no \
+                 resolve changes under `Perturbation::{fails_from:?}` anymore. Record the next level that fails, or \
+                 remove the record if none does"
+            );
+        }
     }
 }
 

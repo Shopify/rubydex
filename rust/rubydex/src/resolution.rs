@@ -125,7 +125,20 @@ impl<'a> Resolver<'a> {
     /// Can panic if there's inconsistent data in the graph
     pub fn resolve(&mut self) {
         let other_ids = self.prepare_units();
+        self.resolve_units(other_ids);
+    }
 
+    /// Runs resolution like [`Resolver::resolve`], but lets `reorder` change the order of the units after they are
+    /// prepared: the convergence loop queue and the remaining definitions. Used to check that the result of resolution
+    /// does not depend on the order of the work.
+    #[cfg(test)]
+    pub(crate) fn resolve_reordered(&mut self, reorder: impl FnOnce(&Graph, &mut VecDeque<Unit>, &mut [DefinitionId])) {
+        let mut other_ids = self.prepare_units();
+        reorder(self.graph, &mut self.unit_queue, &mut other_ids);
+        self.resolve_units(other_ids);
+    }
+
+    fn resolve_units(&mut self, other_ids: Vec<DefinitionId>) {
         loop {
             // Flag to ensure the end of the resolution loop. We go through all items in the queue based on its current
             // length. If we made any progress in this pass of the queue, we can continue because we're unlocking more work
