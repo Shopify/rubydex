@@ -152,6 +152,32 @@ mod constant_resolution_tests {
         assert_no_members!(context, "Bar::Baz");
         assert_owner_eq!(context, "Bar::Baz", "Bar");
     }
+
+    // Wrong even in the default order: the reference falls back to `::X` in the first pass, while `class B::X` waits
+    // for the alias and declares `A::X` in the second. See "Absence is concluded before it is known" in
+    // docs/resolution-fixed-point.md. Remove `should_panic` once lookups stop concluding absence early
+    #[test]
+    #[should_panic(expected = "Expected reference at `file:///foo.rb:3:3-3:4` to be resolved to `A::X`, but got `X`")]
+    fn resolving_reference_to_member_declared_through_alias() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            X = 1
+            module A
+              X
+            end
+            module Holder
+              SELF = ::A
+            end
+            B = Holder::SELF
+            class B::X; end
+            "
+        });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
+        context.resolve();
+
+        assert_constant_reference_to!(context, "A::X", "file:///foo.rb:3:3-3:4");
+    }
 }
 
 mod constant_alias_tests {

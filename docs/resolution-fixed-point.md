@@ -34,7 +34,8 @@ The split rests on the claim that post-loop items have no inverse dependencies. 
 ### Absence is concluded before it is known
 
 Constant lookup reads "scope `S` has no member `X`" while definitions that could add `X` are still pending. This is
-wrong today (verified with a throwaway test; the reference resolves to `::X` instead of `A::X`):
+wrong today (pinned by `resolving_reference_to_member_declared_through_alias` in `resolution_tests.rs`; the reference
+resolves to `::X` instead of `A::X`):
 
 ```ruby
 X = 1
@@ -118,7 +119,9 @@ Each step is shippable and keeps the test suite green.
 
 1. **Pin order independence.** Add a test helper that resolves the same fixture with the unit order shuffled and
    asserts identical graphs. Run it over existing fixtures. Failures are the list of hidden ordering assumptions
-   (the example in section 1 is one). This is the safety net for everything below.
+   (the example in section 1 is one). This is the safety net for everything below. `GraphTest::resolve` does this for
+   every fixture (`rust/rubydex/src/test_utils/order_independence.rs`); fixtures that still depend on the order call
+   `GraphTest::order_dependent` with the first level that changes them and the reason, which is the list to burn down.
 2. **Move the tail into the loop, keeping blind retry.** `prepare_units` stops returning `others`;
    `handle_definition_unit` dispatches every definition kind and returns an `Outcome`. Every
    `graph.push_work(..); continue` becomes `Retry`. Delete `SingletonAncestors::Eager`, the second visibility pass
