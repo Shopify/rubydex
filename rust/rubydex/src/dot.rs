@@ -405,7 +405,7 @@ impl ToDot for Declaration {
 mod tests {
     use super::*;
     use crate::model::ids::DeclarationId;
-    use crate::test_utils::GraphTest;
+    use crate::test_utils::{GraphTest, OrderDependence, Perturbation};
 
     #[test]
     fn test_dot_generation() {
@@ -475,6 +475,7 @@ mod tests {
                 end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         let dot_output = DotBuilder::generate(context.graph(), false);
         assert!(dot_output.contains("inherits"));
@@ -495,6 +496,7 @@ mod tests {
                 end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         let dot_output = DotBuilder::generate(context.graph(), false);
 
@@ -541,6 +543,7 @@ mod tests {
                 end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         let dot_output = DotBuilder::generate(context.graph(), false);
 

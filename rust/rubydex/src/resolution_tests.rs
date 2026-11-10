@@ -10,7 +10,7 @@ use crate::{
     assert_no_diagnostics, assert_no_members, assert_owner_eq, assert_singleton_class_eq,
     diagnostic::{Rule, Severity},
     model::{declaration::Ancestors, ids::DeclarationId, name::NameRef},
-    test_utils::GraphTest,
+    test_utils::{GraphTest, OrderDependence, Perturbation},
 };
 
 fn graph_test() -> GraphTest {
@@ -38,6 +38,7 @@ mod constant_resolution_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -62,6 +63,7 @@ mod constant_resolution_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:5:5-5:10");
@@ -82,6 +84,7 @@ mod constant_resolution_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -101,6 +104,7 @@ mod constant_resolution_tests {
             Foo::Bar
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -166,6 +170,7 @@ mod constant_alias_tests {
             ALIAS::CONST
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
@@ -188,6 +193,7 @@ mod constant_alias_tests {
             ALIAS::CONST
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
@@ -210,6 +216,7 @@ mod constant_alias_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -234,6 +241,7 @@ mod constant_alias_tests {
             ALIAS::CONST
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -255,6 +263,7 @@ mod constant_alias_tests {
             ALIAS2::CONST
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -273,6 +282,7 @@ mod constant_alias_tests {
             ALIAS_2 = ALIAS_1
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -291,6 +301,7 @@ mod constant_alias_tests {
             ALIAS::NOPE
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -313,6 +324,7 @@ mod constant_alias_tests {
             ALIAS::CONST
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -335,6 +347,7 @@ mod constant_alias_tests {
             BAZ = Bar::CONST
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -353,6 +366,7 @@ mod constant_alias_tests {
             C = A
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -377,6 +391,7 @@ mod constant_alias_tests {
             A::X::SOMETHING = 1
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -412,6 +427,7 @@ mod constant_alias_tests {
             Left::RIGHT_REF::LEFT_REF::Deep::VALUE
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -445,6 +461,7 @@ mod constant_alias_tests {
             M::SELF_REF::SELF_REF::SELF_REF::Thing::CONST
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -481,6 +498,7 @@ mod constant_alias_tests {
             FOO = B
             "
         });
+        context.order_dependent(Perturbation::Ties, OrderDependence::DefinitionOrder);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -516,6 +534,7 @@ mod constant_alias_tests {
             FOO::CONST_B
             "
         });
+        context.order_dependent(Perturbation::Ties, OrderDependence::DefinitionOrder);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -537,6 +556,7 @@ mod constant_alias_tests {
         });
         context.index_uri("file:///b.rb", "ALIAS = ALIAS");
         context.index_uri("file:///usage.rb", "ALIAS::CONST");
+        context.order_dependent(Perturbation::Ties, OrderDependence::DefinitionOrder);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -572,6 +592,7 @@ mod constant_alias_tests {
             ALIAS::CONST = 123
             "
         });
+        context.order_dependent(Perturbation::Ties, OrderDependence::DefinitionOrder);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -600,6 +621,7 @@ mod constant_alias_tests {
             Outer::Inner::ADDED_CONST
             "
         });
+        context.order_dependent(Perturbation::Ties, OrderDependence::DefinitionOrder);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -632,6 +654,7 @@ mod constant_alias_tests {
             ALIAS::NewClass::CLASS_CONST
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -663,6 +686,7 @@ mod constant_alias_tests {
             "
         });
         context.index_uri("file:///usage.rb", "ALIAS2::CONST");
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -685,6 +709,7 @@ mod constant_alias_tests {
             "
         });
         context.index_uri("file:///usage.rb", "ALIAS::CONST");
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -703,6 +728,7 @@ mod constant_alias_tests {
             def ALIAS.singleton_method; end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -720,6 +746,7 @@ mod constant_alias_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
     }
@@ -740,6 +767,7 @@ mod constant_alias_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_declaration_exists!(context, "Foo::<Foo>");
@@ -761,6 +789,7 @@ mod constant_alias_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_declaration_exists!(context, "Foo::<Foo>");
@@ -791,6 +820,7 @@ mod constant_alias_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Ties, OrderDependence::DefinitionOrder);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -815,6 +845,7 @@ mod constant_alias_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Ties, OrderDependence::DefinitionOrder);
         context.resolve();
 
         assert_declaration_exists!(context, "Foo::Bar");
@@ -830,6 +861,7 @@ mod constant_alias_tests {
             class Foo < AliasedBase; end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_ancestors_eq!(context, "Foo", ["Foo", "Base", "Object", "Kernel", "BasicObject"]);
@@ -847,6 +879,7 @@ mod constant_alias_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_ancestors_eq!(context, "Foo", ["Foo", "M", "Object", "Kernel", "BasicObject"]);
@@ -866,6 +899,7 @@ mod constant_alias_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_ancestors_eq!(context, "Baz", ["Baz"]);
     }
@@ -884,6 +918,7 @@ mod constant_alias_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_ancestors_eq!(context, "Baz", ["Baz"]);
     }
@@ -901,6 +936,7 @@ mod constant_alias_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_ancestors_eq!(context, "Baz", ["Baz", "Object", "Kernel", "BasicObject"]);
     }
@@ -929,6 +965,7 @@ mod constant_alias_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Ties, OrderDependence::DefinitionOrder);
         context.resolve();
         assert_declaration_does_not_exist!(context, "Foo::Bar::CONST");
         assert_declaration_does_not_exist!(context, "Foo::Bar::<Bar>#@class_ivar");
@@ -966,6 +1003,7 @@ mod constant_alias_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Ties, OrderDependence::DefinitionOrder);
         context.resolve();
         assert_declaration_exists!(context, "Foo::CONST");
         assert_declaration_exists!(context, "Foo::<Foo>#@class_ivar");
@@ -992,6 +1030,7 @@ mod superclass_tests {
             class Qux < Baz; end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -1023,6 +1062,7 @@ mod superclass_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -1041,6 +1081,7 @@ mod superclass_tests {
             class Baz < Foo; end
             "
         });
+        context.order_dependent(Perturbation::Ties, OrderDependence::CycleEntryPoint);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -1062,6 +1103,7 @@ mod superclass_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -1107,6 +1149,7 @@ mod superclass_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -1127,6 +1170,7 @@ mod superclass_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -1150,6 +1194,7 @@ mod superclass_tests {
             Baz::Bar
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -1248,6 +1293,7 @@ mod include_tests {
             class Qux < Baz; end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -1280,6 +1326,7 @@ mod include_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -1414,6 +1461,7 @@ mod include_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -1442,6 +1490,7 @@ mod include_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -1600,6 +1649,7 @@ mod prepend_tests {
             class Qux < Baz; end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -1632,6 +1682,7 @@ mod prepend_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -1808,6 +1859,7 @@ mod prepend_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -1836,6 +1888,7 @@ mod prepend_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -1961,6 +2014,7 @@ mod mixin_dedup_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -2013,6 +2067,7 @@ mod object_ancestors_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::StaleAncestors);
         context.resolve();
 
         assert_ancestors_eq!(context, "Object", ["Object", "Kernel", "Foo", "BasicObject"]);
@@ -2085,6 +2140,7 @@ mod object_ancestors_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -2107,6 +2163,7 @@ mod object_ancestors_tests {
             FOUND_ME
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -2136,6 +2193,7 @@ mod object_ancestors_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Ties, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -2163,6 +2221,7 @@ mod object_ancestors_tests {
             Foo::FOUND_ME # this is not
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -2189,6 +2248,7 @@ mod object_ancestors_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_constant_reference_to!(context, "Kernel::FOUND_ME", "file:///foo.rb:3:3-3:11");
@@ -2221,6 +2281,7 @@ mod singleton_ancestors_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::StaleAncestors);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -2288,6 +2349,7 @@ mod singleton_ancestors_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::StaleAncestors);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -2337,6 +2399,7 @@ mod singleton_ancestors_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::StaleAncestors);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -2412,6 +2475,7 @@ mod singleton_ancestors_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_ancestors_eq!(
@@ -2445,6 +2509,7 @@ mod singleton_ancestors_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_exists!(context, "Foo::<Foo>");
@@ -2480,6 +2545,7 @@ mod singleton_ancestors_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_exists!(context, "Foo::<Foo>");
@@ -2513,6 +2579,7 @@ mod singleton_ancestors_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_exists!(context, "Foo::<Foo>");
@@ -2577,6 +2644,7 @@ mod method_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -2784,6 +2852,7 @@ mod method_alias_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -2903,6 +2972,7 @@ mod variable_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -2986,6 +3056,7 @@ mod variable_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -3008,6 +3079,7 @@ mod variable_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -3053,6 +3125,7 @@ mod variable_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -3120,6 +3193,7 @@ mod declaration_creation_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -3262,6 +3336,7 @@ mod singleton_class_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -3308,6 +3383,7 @@ mod singleton_class_tests {
             Foo.
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context, &[Rule::ParseError]);
 
@@ -3339,6 +3415,7 @@ mod singleton_class_tests {
             Foo.singleton_class.singleton_class.to_s
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
 
@@ -3380,6 +3457,7 @@ mod singleton_class_tests {
             Foo::Bar.singleton_class.to_s
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
 
@@ -3464,6 +3542,7 @@ mod singleton_class_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -3494,6 +3573,7 @@ mod singleton_class_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -3520,6 +3600,7 @@ mod singleton_class_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -3550,6 +3631,7 @@ mod singleton_class_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -3695,6 +3777,7 @@ mod fqn_and_naming_tests {
               end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
@@ -3724,6 +3807,7 @@ mod todo_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -3756,6 +3840,7 @@ mod todo_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -3784,6 +3869,7 @@ mod todo_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Ties, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         // Bar is unknown — a Todo is created at the top level, not "Foo::Bar"
@@ -3820,6 +3906,7 @@ mod todo_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -3846,6 +3933,7 @@ mod todo_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -3885,6 +3973,7 @@ mod todo_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_kind_eq!(context, "A", "<TODO>");
@@ -3911,6 +4000,7 @@ mod todo_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_kind_eq!(context, "A", "<TODO>");
@@ -3940,6 +4030,7 @@ mod todo_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_kind_eq!(context, "A", "Module");
@@ -3966,6 +4057,7 @@ mod todo_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_kind_eq!(context, "A", "<TODO>");
@@ -3996,6 +4088,7 @@ mod todo_tests {
             "
         });
         context.index_uri("file:///d.rb", "class A::B::D < A::B::C; end");
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_kind_eq!(context, "A", "<TODO>");
@@ -4035,6 +4128,7 @@ mod todo_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_kind_eq!(context, "A", "<TODO>");
@@ -4074,6 +4168,7 @@ mod todo_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_kind_eq!(context, "A", "<TODO>");
@@ -4098,6 +4193,7 @@ mod todo_tests {
             module Bar; end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_kind_eq!(context, "Foo", "Module");
@@ -4130,6 +4226,7 @@ mod todo_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_exists!(context, "Bar::Baz");
@@ -4159,6 +4256,7 @@ mod todo_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
 
@@ -4215,6 +4313,7 @@ mod todo_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -4249,6 +4348,7 @@ mod todo_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -4325,6 +4425,7 @@ mod dynamic_namespace_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_ancestors_eq!(context, "Bar", ["Bar", "Baz", "Object", "Kernel", "BasicObject"]);
@@ -4340,6 +4441,7 @@ mod dynamic_namespace_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
     }
@@ -4355,6 +4457,7 @@ mod dynamic_namespace_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_ancestors_eq!(context, "Bar", ["Bar", "Object", "Kernel", "BasicObject"]);
@@ -4409,6 +4512,7 @@ mod dynamic_namespace_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_ancestors_eq!(
@@ -4462,6 +4566,7 @@ mod promotability_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Ties, OrderDependence::DefinitionOrder);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_declaration_exists!(context, "FOO");
@@ -4478,6 +4583,7 @@ mod promotability_tests {
                 "#
         });
 
+        context.order_dependent(Perturbation::Ties, OrderDependence::DefinitionOrder);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_declaration_kind_eq!(context, "FOO", "Constant");
@@ -4498,6 +4604,7 @@ mod promotability_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_ancestors_eq!(context, "Bar", ["Bar", "Baz", "Object", "Kernel", "BasicObject"]);
@@ -4512,6 +4619,7 @@ mod promotability_tests {
         context.index_uri("file:///b.rb", "Foo = 42");
         context.index_uri("file:///c.rb", "class Foo; end");
 
+        context.order_dependent(Perturbation::Ties, OrderDependence::DefinitionOrder);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_declaration_kind_eq!(context, "Foo", "Constant");
@@ -4532,6 +4640,7 @@ mod promotability_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_ancestors_eq!(context, "Bar", ["Bar", "Baz"]);
@@ -4563,6 +4672,7 @@ mod promotability_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_declaration_exists!(context, "A::B");
@@ -4578,6 +4688,7 @@ mod promotability_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_declaration_kind_eq!(context, "Qux", "<TODO>");
@@ -4594,6 +4705,7 @@ mod promotability_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_declaration_does_not_exist!(context, "FOO::<FOO>");
@@ -4609,6 +4721,7 @@ mod promotability_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_declaration_exists!(context, "Qux::<Qux>");
@@ -4626,6 +4739,7 @@ mod promotability_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
         assert_declaration_kind_eq!(context, "Foo", "<TODO>");
@@ -4663,6 +4777,7 @@ mod promotability_tests {
         });
         // Should not panic when a `def self.` method is inside a constant that can't be promoted to a namespace (e.g.,
         // `CONST = 1` is non-promotable).
+        context.order_dependent(Perturbation::Ties, OrderDependence::DefinitionOrder);
         context.resolve();
         assert_declaration_exists!(context, "CONST");
     }
@@ -4678,6 +4793,7 @@ mod promotability_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_declaration_kind_eq!(context, "Foo", "<TODO>");
         assert_declaration_kind_eq!(context, "Foo::Bar", "<TODO>");
@@ -4697,6 +4813,7 @@ mod promotability_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_declaration_kind_eq!(context, "Foo", "<TODO>");
         assert_declaration_exists!(context, "Foo::<Foo>#bar()");
@@ -4715,6 +4832,7 @@ mod promotability_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_declaration_kind_eq!(context, "Foo", "Constant");
         assert_declaration_does_not_exist!(context, "Foo::<Foo>");
@@ -4730,6 +4848,7 @@ mod promotability_tests {
             ENV.fetch("FEATURE")
             "#
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -4752,6 +4871,7 @@ mod promotability_tests {
     fn singleton_on_todo_is_preserved_and_relinearized_when_promoted_to_class() {
         let mut context = graph_test();
         context.index_uri("file:///placeholder.rb", "class Foo::Placeholder; end");
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_kind_eq!(context, "Foo", "<TODO>");
@@ -4786,6 +4906,7 @@ mod promotability_tests {
     fn singleton_on_todo_is_preserved_when_promoted_to_module() {
         let mut context = graph_test();
         context.index_uri("file:///placeholder.rb", "class Bar::Placeholder; end");
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_declaration_kind_eq!(context, "Bar", "<TODO>");
@@ -4811,6 +4932,7 @@ mod promotability_tests {
     fn higher_order_singleton_on_todo_is_relinearized_when_promoted_to_class() {
         let mut context = graph_test();
         context.index_uri("file:///placeholder.rb", "class Foo::Placeholder; end");
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         context.index_uri("file:///value.rb", {
@@ -4861,6 +4983,7 @@ mod promotability_tests {
             "
         });
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
 
@@ -4884,6 +5007,7 @@ mod promotability_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         // Nothing can be placed yet: `Aliased` aliases a constant that does not exist.
@@ -4927,6 +5051,7 @@ mod promotability_tests {
             ",
         );
 
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
         assert_no_diagnostics!(&context);
 
@@ -4954,6 +5079,7 @@ mod promotability_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         // Nothing can be placed yet: `Aliased` aliases a constant that does not exist.
@@ -5046,6 +5172,7 @@ mod rbs_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -5079,6 +5206,7 @@ mod rbs_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -5133,6 +5261,7 @@ mod rbs_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -5160,6 +5289,7 @@ mod rbs_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -5186,6 +5316,7 @@ mod rbs_tests {
             Bar::QUX: ::String
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -5416,6 +5547,7 @@ mod visibility_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -5443,6 +5575,7 @@ mod visibility_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -5602,6 +5735,7 @@ mod visibility_resolution_tests {
             ALIAS.private_constant :BAZ
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -5647,6 +5781,7 @@ mod visibility_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_diagnostics_eq!(
@@ -5675,6 +5810,7 @@ mod visibility_resolution_tests {
             Foo.private_constant :BAR
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -5770,6 +5906,7 @@ mod visibility_resolution_tests {
             end
             ",
         );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
