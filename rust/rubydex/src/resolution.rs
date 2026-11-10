@@ -509,11 +509,10 @@ impl<'a> Resolver<'a> {
                         // If the instance variable is directly in a class/module body, it belongs to the class object
                         // and is owned by the singleton class of that class/module
                         Definition::Class(_) | Definition::Module(_) => {
-                            let nesting_decl_id = self
-                                .graph
-                                .definition_id_to_declaration_id(nesting_id)
-                                .copied()
-                                .unwrap_or(*OBJECT_ID);
+                            let Some(&nesting_decl_id) = self.graph.definition_id_to_declaration_id(nesting_id) else {
+                                self.graph.push_work(Unit::Definition(id));
+                                continue;
+                            };
 
                             let Some(owner_id) =
                                 self.get_or_create_singleton_class(nesting_decl_id, SingletonAncestors::Eager)
@@ -875,25 +874,25 @@ impl<'a> Resolver<'a> {
                 break Some(*OBJECT_ID);
             };
 
-            // If no declaration exists yet for this definition, walk up the lexical chain.
-            // This handles the case where attr_* definitions inside methods are processed
-            // before the method definition itself. A SingletonClass with no declaration
-            // is an exception: returning the surrounding scope would attach its members to
-            // the wrong owner (e.g. `Object`) and never recover, so retry later instead.
-            let Some(declaration_id) = self.graph.definition_id_to_declaration_id(id) else {
-                let definition = self.graph.definitions().get(&id).unwrap();
-                if matches!(definition, Definition::SingletonClass(_)) {
-                    break None;
-                }
+            let definition = self.graph.definitions().get(&id).unwrap();
+
+            // Methods do not own members: an attribute defined in a method body belongs to the method's owner
+            if matches!(definition, Definition::Method(_)) {
                 current_nesting = *definition.lexical_nesting_id();
                 continue;
+            }
+
+            // The enclosing namespace has no declaration yet. Returning the surrounding scope would attach the member to
+            // the wrong owner (e.g. `Object`) and never recover, so retry later instead.
+            let Some(declaration_id) = self.graph.definition_id_to_declaration_id(id) else {
+                break None;
             };
 
             let decl = self.graph.declarations().get(declaration_id).unwrap();
 
-            // If the associated declaration is a namespace that can own things, we found the right owner. Otherwise, we might
-            // have found something nested inside something else (like a method), in which case we have to walk up until we find
-            // the appropriate owner.
+            // If the associated declaration is a namespace that can own things, we found the right owner. Otherwise, the
+            // definition reopened something that is not a namespace (e.g. `FOO = 1; class FOO; end`), in which case we
+            // have to walk up until we find the appropriate owner.
             if matches!(
                 decl,
                 Declaration::Namespace(Namespace::Class(_) | Namespace::Module(_) | Namespace::SingletonClass(_))
@@ -907,7 +906,6 @@ impl<'a> Resolver<'a> {
                 break self.resolve_to_namespace(*declaration_id);
             }
 
-            let definition = self.graph.definitions().get(&id).unwrap();
             current_nesting = *definition.lexical_nesting_id();
         };
 

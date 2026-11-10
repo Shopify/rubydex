@@ -2770,6 +2770,41 @@ mod method_tests {
         // All attr_* should be owned by Foo, not by setup
         assert_members_eq!(context, "Foo", ["accessor_attr()", "reader_attr()", "writer_attr()"]);
     }
+
+    #[test]
+    fn members_wait_for_their_namespace_to_be_declared() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Aliased = Undefined
+
+            class Aliased::Inner
+              @count = 0
+              def run; end
+              attr_reader :name
+            end
+            "
+        });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
+        context.resolve();
+
+        // `Inner` cannot be declared while `Aliased` is unknown, and its members do not belong to the enclosing scope
+        assert_declaration_does_not_exist!(context, "Aliased::Inner");
+        assert_declaration_does_not_exist!(context, "Object#run()");
+        assert_declaration_does_not_exist!(context, "Object#name()");
+        assert_declaration_does_not_exist!(context, "Object::<Object>#@count");
+
+        context.index_uri("file:///undefined.rb", {
+            r"
+            module Undefined; end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_members_eq!(context, "Undefined::Inner", ["name()", "run()"]);
+        assert_members_eq!(context, "Undefined::Inner::<Inner>", ["@count"]);
+    }
 }
 
 mod method_alias_tests {
