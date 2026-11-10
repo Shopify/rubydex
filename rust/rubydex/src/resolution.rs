@@ -859,6 +859,9 @@ impl<'a> Resolver<'a> {
         match mode {
             SingletonAncestors::Enqueue => {
                 self.unit_queue.push_back(Unit::Ancestors(id));
+                // A new singleton is progress, even when the unit that created it retries: the final pass must not
+                // conclude from its ancestors before they are linearized
+                self.made_progress = true;
             }
             // The caller is already linearizing this singleton inline within the current
             // `LinearizationContext`, so a separate unit would be redundant work.
