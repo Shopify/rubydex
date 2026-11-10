@@ -1848,7 +1848,10 @@ impl<'a> Resolver<'a> {
 
         members.sort_unstable_by_key(|(_, key)| *key);
 
-        // Constant definitions first, then constant refs, then member definitions, then ancestors
+        // Constant definitions first, then constant refs, then member definitions, then ancestors. Reserved at once, so
+        // that the queue is not regrown once per group: member definitions are most of the units
+        self.unit_queue
+            .reserve(definitions.len() + const_refs.len() + members.len() + ancestors.len());
         self.unit_queue.extend(definitions.into_iter().map(|(id, _)| id));
         self.unit_queue.extend(const_refs.into_iter().map(|(id, _)| id));
         self.unit_queue.extend(members.into_iter().map(|(id, _)| id));
