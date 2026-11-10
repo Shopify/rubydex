@@ -271,7 +271,7 @@ impl<'a> RBSIndexer<'a> {
                     flags.clone(),
                     lexical_nesting_id,
                     visibility,
-                    receiver.clone(),
+                    receiver,
                 );
                 self.register_attribute_method(
                     name,

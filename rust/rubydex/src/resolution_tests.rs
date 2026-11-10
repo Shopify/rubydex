@@ -2770,6 +2770,78 @@ mod method_tests {
         // All attr_* should be owned by Foo, not by setup
         assert_members_eq!(context, "Foo", ["accessor_attr()", "reader_attr()", "writer_attr()"]);
     }
+
+    #[test]
+    fn members_wait_for_their_namespace_to_be_declared() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Aliased = Undefined
+
+            class Aliased::Inner
+              @count = 0
+              def run; end
+              attr_reader :name
+            end
+            "
+        });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
+        context.resolve();
+
+        // `Inner` cannot be declared while `Aliased` is unknown, and its members do not belong to the enclosing scope
+        assert_declaration_does_not_exist!(context, "Aliased::Inner");
+        assert_declaration_does_not_exist!(context, "Object#run()");
+        assert_declaration_does_not_exist!(context, "Object#name()");
+        assert_declaration_does_not_exist!(context, "Object::<Object>#@count");
+
+        context.index_uri("file:///undefined.rb", {
+            r"
+            module Undefined; end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_members_eq!(context, "Undefined::Inner", ["name()", "run()"]);
+        assert_members_eq!(context, "Undefined::Inner::<Inner>", ["@count"]);
+    }
+
+    #[test]
+    fn singleton_created_by_method_with_constant_receiver_relinearizes_when_superclass_is_discovered() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo < Bar; end
+            def Foo.baz; end
+            "
+        });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
+        context.resolve();
+
+        context.index_uri("file:///bar.rb", {
+            r"
+            class Bar; end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>",
+            [
+                "Foo::<Foo>",
+                "Bar::<Bar>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
 }
 
 mod method_alias_tests {
@@ -3599,7 +3671,6 @@ mod singleton_class_tests {
             end
             "
         });
-        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -4412,6 +4483,7 @@ mod todo_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -5891,6 +5963,32 @@ mod visibility_resolution_tests {
         );
         context.resolve();
 
+        assert_visibility_eq!(context, "Foo::BAR", Visibility::Private);
+    }
+
+    #[test]
+    fn retroactive_constant_visibility_resolves_when_receiver_discovered_incrementally() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///vis.rb",
+            r"
+            Foo.private_constant :BAR
+            ",
+        );
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
+        context.resolve();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              BAR = 1
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
         assert_visibility_eq!(context, "Foo::BAR", Visibility::Private);
     }
 

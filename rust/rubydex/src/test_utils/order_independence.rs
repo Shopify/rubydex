@@ -11,7 +11,7 @@ use crate::model::{
     declaration::{Ancestor, Ancestors},
     definitions::Definition,
     graph::{Graph, Unit},
-    ids::{DeclarationId, DefinitionId, UriId},
+    ids::{DeclarationId, UriId},
     name::NameRef,
 };
 use crate::offset::Offset;
@@ -24,11 +24,11 @@ pub(crate) const SEEDS: u64 = 64;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Perturbation {
     /// Shuffles what the resolver sort claims to order only for determinism: units of the same kind and name depth in
-    /// any URI and offset order, and the remaining definitions (methods, attributes, variables, visibility changes) in
-    /// any order
+    /// any URI and offset order, and member definitions (methods, attributes, variables, aliases, visibility changes),
+    /// which have no name depth, in any order
     Ties,
-    /// Also ignores name depth: units of the same kind in any order, with the kinds still in sequence (definitions,
-    /// constant references, singleton methods, ancestors)
+    /// Also ignores name depth: units of the same kind in any order, with the kinds still in sequence (constant
+    /// definitions, constant references, member definitions, ancestors)
     Kinds,
     /// The convergence loop queue in any order, with all kinds interleaved
     Full,
@@ -87,13 +87,7 @@ impl Rng {
 }
 
 /// Reorders the prepared units within the freedom `level` allows
-pub(crate) fn reorder(
-    graph: &Graph,
-    queue: &mut VecDeque<Unit>,
-    others: &mut [DefinitionId],
-    level: Perturbation,
-    rng: &mut Rng,
-) {
+pub(crate) fn reorder(graph: &Graph, queue: &mut VecDeque<Unit>, level: Perturbation, rng: &mut Rng) {
     let units = queue.make_contiguous();
     rng.shuffle(units);
 
@@ -108,8 +102,6 @@ pub(crate) fn reorder(
             Perturbation::Full => (fixture, 0, 0),
         }
     });
-
-    rng.shuffle(others);
 }
 
 fn is_built_in_definition(unit: &Unit, graph: &Graph) -> bool {
@@ -119,10 +111,13 @@ fn is_built_in_definition(unit: &Unit, graph: &Graph) -> bool {
 /// The position of the unit's kind in the queue `prepare_units` builds
 fn kind_rank(graph: &Graph, unit: &Unit) -> u8 {
     match unit {
-        // Methods only enter the queue when they have a `self` receiver
         Unit::Definition(id) => match graph.definitions().get(id).unwrap() {
-            Definition::Method(_) => 2,
-            _ => 0,
+            Definition::Class(_)
+            | Definition::Module(_)
+            | Definition::Constant(_)
+            | Definition::ConstantAlias(_)
+            | Definition::SingletonClass(_) => 0,
+            _ => 2,
         },
         Unit::ConstantRef(_) => 1,
         Unit::Ancestors(_) => 3,
