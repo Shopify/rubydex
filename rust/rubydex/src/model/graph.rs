@@ -49,7 +49,7 @@ assert_mem_size!(InvalidationItem, 16);
 /// A work item produced by graph mutations (update/delete) that needs resolution.
 #[derive(Debug)]
 pub enum Unit {
-    /// A definition that defines a constant and might require resolution
+    /// A definition that needs a declaration and an owner
     Definition(DefinitionId),
     /// A constant reference that needs to be resolved
     ConstantRef(ConstantReferenceId),

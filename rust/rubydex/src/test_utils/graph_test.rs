@@ -158,8 +158,8 @@ impl GraphTest {
                 Step::IndexRuby(uri, source) => replay.index_uri(uri, source),
                 Step::IndexRbs(uri, source) => replay.index_rbs_uri(uri, source),
                 Step::Delete(uri) => replay.delete_uri(uri),
-                Step::Resolve => Resolver::new(&mut replay.graph).resolve_reordered(|graph, queue, others| {
-                    order_independence::reorder(graph, queue, others, level, &mut rng);
+                Step::Resolve => Resolver::new(&mut replay.graph).resolve_reordered(|graph, queue| {
+                    order_independence::reorder(graph, queue, level, &mut rng);
                 }),
             }
         }

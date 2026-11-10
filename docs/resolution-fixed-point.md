@@ -126,7 +126,11 @@ Each step is shippable and keeps the test suite green.
    `handle_definition_unit` dispatches every definition kind and returns an `Outcome`. Every
    `graph.push_work(..); continue` becomes `Retry`. Delete `SingletonAncestors::Eager`, the second visibility pass
    and the walk-up workaround in `resolve_lexical_owner`. Keep the current sort and place member definitions after
-   constant references: now purely an optimization so most units succeed first try.
+   constant references: now purely an optimization so most units succeed first try. As shipped, member definitions
+   already conclude a missing owner or visibility target (drop or diagnostic) only in a final pass that runs after a
+   pass without progress; references and ancestors skip that pass and conclude as before. `resolve_lexical_owner`
+   still walks past methods and past a definition that reopened a non-namespace (`FOO = 1; class FOO; end`), which is
+   error recovery rather than ordering.
 3. **Add the quiescence step.** When a pass makes no progress, run the stuck units once with `final = true`. Move
    every negative conclusion behind that flag: undefined-visibility diagnostics, `Todo` creation for unknown
    parents, the `Object` fallback for incomplete chains, `Outcome::Unresolved`. Steps 2 and 3 together are

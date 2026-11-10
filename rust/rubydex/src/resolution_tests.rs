@@ -2805,6 +2805,43 @@ mod method_tests {
         assert_members_eq!(context, "Undefined::Inner", ["name()", "run()"]);
         assert_members_eq!(context, "Undefined::Inner::<Inner>", ["@count"]);
     }
+
+    #[test]
+    fn singleton_created_by_method_with_constant_receiver_relinearizes_when_superclass_is_discovered() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo < Bar; end
+            def Foo.baz; end
+            "
+        });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
+        context.resolve();
+
+        context.index_uri("file:///bar.rb", {
+            r"
+            class Bar; end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>",
+            [
+                "Foo::<Foo>",
+                "Bar::<Bar>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
 }
 
 mod method_alias_tests {
@@ -3634,7 +3671,6 @@ mod singleton_class_tests {
             end
             "
         });
-        context.order_dependent(Perturbation::Kinds, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
@@ -4447,6 +4483,7 @@ mod todo_tests {
             end
             "
         });
+        context.order_dependent(Perturbation::Full, OrderDependence::AbsenceReadEarly);
         context.resolve();
 
         assert_no_diagnostics!(&context);
