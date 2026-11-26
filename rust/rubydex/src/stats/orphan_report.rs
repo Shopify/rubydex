@@ -73,8 +73,7 @@ impl Graph {
                 let prefix = name_ref
                     .nesting()
                     .as_ref()
-                    .map(|nesting_id| self.build_nesting_prefix(*nesting_id))
-                    .unwrap_or_default();
+                    .map_or_default(|nesting_id| self.build_nesting_prefix(*nesting_id));
 
                 if prefix.is_empty() {
                     simple_name

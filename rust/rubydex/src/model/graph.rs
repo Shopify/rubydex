@@ -1257,8 +1257,7 @@ impl Graph {
                 let is_singleton_class = matches!(decl, Declaration::Namespace(Namespace::SingletonClass(_)));
                 let ancestors_to_detach: Vec<Ancestor> = decl
                     .as_namespace()
-                    .map(|ns| ns.ancestors().iter().copied().collect())
-                    .unwrap_or_default();
+                    .map_or_default(|ns| ns.ancestors().iter().copied().collect());
 
                 for def_id in def_ids {
                     self.push_work(Unit::Definition(def_id));
