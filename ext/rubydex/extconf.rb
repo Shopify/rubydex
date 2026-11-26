@@ -53,7 +53,7 @@ if Gem.win_platform?
   #
   # These libraries are the ones informed by `cargo rustc -- --print native-static-libs`, which displays the
   # libraries necessary for statically linking the Rust code on the current platform
-  ["kernel32", "ntdll", "userenv", "ws2_32", "dbghelp", "msvcrt"].each do |lib|
+  ["kernel32", "ntdll", "userenv", "ws2_32", "dbghelp", "msvcrt", "synchronization"].each do |lib|
     $LDFLAGS << " -l#{lib}"
   end
 else
