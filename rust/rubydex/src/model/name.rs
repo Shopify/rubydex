@@ -96,12 +96,28 @@ pub struct Name {
     ref_count: u32,
     /// The depth of the name, which combines the depths of the parent scope and nesting
     depth: u16,
+    /// Whether this name is evaluated before the constant with the same name in the same scope gets defined. The
+    /// superclass of `class Foo < Foo` is evaluated before `class` creates the new `Foo`, so resolving it must not find
+    /// the class being defined:
+    ///
+    /// ```ruby
+    /// class Foo; end
+    ///
+    /// module Bar
+    ///   class Foo < Foo # the superclass is `::Foo`, not `Bar::Foo`
+    ///   end
+    /// end
+    /// ```
+    before_definition: bool,
 }
 assert_mem_size!(Name, 40);
 
 impl PartialEq for Name {
     fn eq(&self, other: &Self) -> bool {
-        self.str == other.str && self.parent_scope == other.parent_scope && self.nesting == other.nesting
+        self.str == other.str
+            && self.parent_scope == other.parent_scope
+            && self.nesting == other.nesting
+            && self.before_definition == other.before_definition
     }
 }
 
@@ -119,7 +135,31 @@ impl Name {
             nesting,
             ref_count: 1,
             depth: Self::name_depth(names, parent_scope, nesting),
+            before_definition: false,
         }
+    }
+
+    /// Marks this name as evaluated before the constant with the same name in the same scope gets defined. See
+    /// `before_definition`
+    #[must_use]
+    pub fn evaluated_before_definition(mut self) -> Self {
+        self.before_definition = true;
+        self
+    }
+
+    #[must_use]
+    pub fn is_before_definition(&self) -> bool {
+        self.before_definition
+    }
+
+    /// The ID of the name of the constant this name is evaluated before, for a name evaluated before a definition
+    #[must_use]
+    pub fn defined_name_id(&self) -> NameId {
+        Self {
+            before_definition: false,
+            ..self.clone()
+        }
+        .id()
     }
 
     #[must_use]
@@ -170,7 +210,11 @@ impl Name {
             Some(id) => (1, id.get()),
         };
 
-        id_from_parts!(NameId; self.str.get(), parent_tag, parent_id, nesting_tag, nesting_id)
+        if self.before_definition {
+            id_from_parts!(NameId; self.str.get(), parent_tag, parent_id, nesting_tag, nesting_id, 1u8)
+        } else {
+            id_from_parts!(NameId; self.str.get(), parent_tag, parent_id, nesting_tag, nesting_id)
+        }
     }
 }
 

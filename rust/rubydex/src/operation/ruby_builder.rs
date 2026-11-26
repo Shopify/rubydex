@@ -3,6 +3,7 @@
 //! Walks the parsed AST and produces `Vec<Operation>` that can later be applied
 //! by the applier to create definitions and declarations in a `LocalGraph`.
 
+use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 
 use crate::diagnostic::{Diagnostic, Rule};
@@ -81,6 +82,12 @@ pub struct RubyOperationBuilder<'a> {
     nesting_stack: Vec<Nesting>,
     visibility_stack: Vec<VisibilityModifier>,
     pending_decorator_offset: Option<Offset>,
+    /// Start offsets of the program's top level statements, where `self` is `main`
+    top_level_statements: HashSet<u32>,
+    /// How many blocks enclose the current node. A block may run with a different `self`
+    block_depth: usize,
+    /// The block depth at each class, module or singleton class body on the nesting stack
+    namespace_block_depths: Vec<usize>,
     // Output
     operations: Vec<Operation>,
 }
@@ -100,6 +107,9 @@ impl<'a> RubyOperationBuilder<'a> {
             nesting_stack: Vec::new(),
             visibility_stack: vec![VisibilityModifier::new(Visibility::Private, false, Offset::new(0, 0))],
             pending_decorator_offset: None,
+            top_level_statements: HashSet::new(),
+            block_depth: 0,
+            namespace_block_depths: Vec::new(),
             operations: Vec::new(),
         }
     }
@@ -125,6 +135,14 @@ impl<'a> RubyOperationBuilder<'a> {
         }
 
         self.comments = self.parse_comments_into_groups(&result);
+        if let Some(program) = result.node().as_program_node() {
+            self.top_level_statements = program
+                .statements()
+                .body()
+                .iter()
+                .map(|statement| statement.location().start())
+                .collect();
+        }
         self.visit(&result.node());
 
         OperationBuilderResult {
@@ -156,6 +174,17 @@ impl<'a> RubyOperationBuilder<'a> {
 
     fn add_name(&mut self, str: StringId, parent_scope: ParentScope, nesting: Option<NameId>) -> NameId {
         let name = Name::new(&self.names, str, parent_scope, nesting);
+        self.insert_name(name)
+    }
+
+    /// Adds a name evaluated before the constant with the same name in the same scope gets defined, like the superclass
+    /// of `class Foo < Foo`
+    fn add_name_before_definition(&mut self, str: StringId, nesting: Option<NameId>) -> NameId {
+        let name = Name::new(&self.names, str, ParentScope::None, nesting).evaluated_before_definition();
+        self.insert_name(name)
+    }
+
+    fn insert_name(&mut self, name: Name) -> NameId {
         let name_id = name.id();
 
         match self.names.entry(name_id) {
@@ -194,6 +223,20 @@ impl<'a> RubyOperationBuilder<'a> {
             Nesting::LexicalScope { name_id, .. } => Some(*name_id),
             Nesting::Owner { .. } | Nesting::Method { .. } => None,
         })
+    }
+
+    /// The namespace `self` refers to, when it is known statically: directly in a `class`, `module` or `class << x` body,
+    /// outside of any method or block. Inside a method `self` depends on the receiver, and a block may be evaluated
+    /// with another `self` (`instance_eval`, `class_eval`)
+    fn static_self_name_id(&self) -> Option<NameId> {
+        let Some(Nesting::LexicalScope { name_id, .. }) = self.nesting_stack.last() else {
+            return None;
+        };
+        if self.namespace_block_depths.last() != Some(&self.block_depth) {
+            return None;
+        }
+
+        Some(*name_id)
     }
 
     fn current_owner_name_id(&self) -> Option<NameId> {
@@ -283,21 +326,28 @@ impl<'a> RubyOperationBuilder<'a> {
                 let constant = node.as_constant_path_node().unwrap();
 
                 if let Some(parent) = constant.parent() {
-                    match parent {
-                        ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => {}
-                        _ => {
-                            self.add_diagnostic(
-                                Rule::DynamicConstantReference,
-                                Offset::from_prism_location(&parent.location()),
-                                "Dynamic constant reference".to_string(),
-                            );
-                            return None;
+                    if parent.as_self_node().is_some()
+                        && let Some(self_name_id) = self.static_self_name_id()
+                    {
+                        // `self::Bar` directly in a class body is `Foo::Bar`
+                        parent_scope_id = ParentScope::Some(self_name_id);
+                    } else {
+                        match parent {
+                            ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => {}
+                            _ => {
+                                self.add_diagnostic(
+                                    Rule::DynamicConstantReference,
+                                    Offset::from_prism_location(&parent.location()),
+                                    "Dynamic constant reference".to_string(),
+                                );
+                                return None;
+                            }
                         }
-                    }
 
-                    parent_scope_id = self
-                        .index_constant_reference(&parent, true)
-                        .map_or(ParentScope::None, ParentScope::Some);
+                        parent_scope_id = self
+                            .index_constant_reference(&parent, true)
+                            .map_or(ParentScope::None, ParentScope::Some);
+                    }
                 } else {
                     parent_scope_id = ParentScope::TopLevel;
                 }
@@ -626,6 +676,26 @@ impl<'a> RubyOperationBuilder<'a> {
 
     // -- Definition handlers --
 
+    /// Indexes the name of a superclass. In `class Foo < Foo`, the superclass is evaluated before `class` creates the new
+    /// `Foo`, so its name is marked to not resolve to the class being defined
+    fn index_superclass_reference(
+        &mut self,
+        superclass_node: &ruby_prism::Node,
+        class_name_node: Option<&ruby_prism::Node>,
+    ) -> Option<NameId> {
+        if let (ruby_prism::Node::ConstantReadNode { .. }, Some(ruby_prism::Node::ConstantReadNode { .. })) =
+            (superclass_node, class_name_node)
+            && superclass_node.location().as_slice() == class_name_node.unwrap().location().as_slice()
+        {
+            let name = Self::location_to_string(&superclass_node.location());
+            let string_id = self.intern_string(name);
+            let nesting = self.current_lexical_scope_name_id();
+            return Some(self.add_name_before_definition(string_id, nesting));
+        }
+
+        self.index_constant_reference(superclass_node, false)
+    }
+
     fn handle_class_definition(
         &mut self,
         location: &ruby_prism::Location,
@@ -637,7 +707,7 @@ impl<'a> RubyOperationBuilder<'a> {
         let offset = Offset::from_prism_location(location);
         let (comments, flags) = self.find_comments_for(offset.start());
         let superclass_name = superclass_node.as_ref().and_then(|n| {
-            if let Some(id) = self.index_constant_reference(n, false) {
+            if let Some(id) = self.index_superclass_reference(n, name_node) {
                 self.operations
                     .push(Operation::ReferenceConstant(op::ReferenceConstant {
                         name_id: id,
@@ -716,12 +786,14 @@ impl<'a> RubyOperationBuilder<'a> {
                 }
             };
             self.nesting_stack.push(nesting);
+            self.namespace_block_depths.push(self.block_depth);
             self.visibility_stack
                 .push(VisibilityModifier::new(Visibility::Public, false, offset));
             if let Some(body) = body_node {
                 self.visit(&body);
             }
             self.visibility_stack.pop();
+            self.namespace_block_depths.pop();
             self.nesting_stack.pop();
             self.operations.push(Operation::ExitScope);
         }
@@ -777,12 +849,14 @@ impl<'a> RubyOperationBuilder<'a> {
                 }
             };
             self.nesting_stack.push(nesting);
+            self.namespace_block_depths.push(self.block_depth);
             self.visibility_stack
                 .push(VisibilityModifier::new(Visibility::Public, false, offset));
             if let Some(body) = body_node {
                 self.visit(&body);
             }
             self.visibility_stack.pop();
+            self.namespace_block_depths.pop();
             self.nesting_stack.pop();
             self.operations.push(Operation::ExitScope);
         }
@@ -859,8 +933,35 @@ impl<'a> RubyOperationBuilder<'a> {
             })
             .collect::<Vec<(NameId, Offset)>>();
 
-        if mixin_arguments.is_empty() || !has_owner {
+        if mixin_arguments.is_empty() {
             return;
+        }
+
+        // A top level `include` statement is `main.include`, which includes the module into `Object`. Record it as a
+        // reopening of `Object` at the call site. Inside a block (`Struct.new do ... end`) `self` is unknown, top level
+        // `prepend` doesn't exist and top level `extend` only affects `main`, so those are skipped
+        let reopens_object = !has_owner
+            && matches!(kind, MixinKind::Include)
+            && self.top_level_statements.contains(&node.location().start());
+        if !has_owner && !reopens_object {
+            return;
+        }
+
+        if reopens_object {
+            let str_id = self.intern_string("Object".to_string());
+            let name_id = self.add_name(str_id, ParentScope::None, None);
+            let offset = Offset::from_prism_location(&node.location());
+
+            self.operations.push(Operation::EnterClass(op::EnterClass {
+                name_id,
+                uri_id: self.uri_id,
+                offset: offset.clone(),
+                name_offset: offset,
+                comments: Box::default(),
+                flags: DefinitionFlags::empty(),
+                superclass_name: None,
+                is_lexical_scope: false,
+            }));
         }
 
         // Mixin operations with multiple arguments are inserted in reverse
@@ -876,6 +977,10 @@ impl<'a> RubyOperationBuilder<'a> {
                 kind,
                 target: Target::Constant(name_id),
             }));
+        }
+
+        if reopens_object {
+            self.operations.push(Operation::ExitScope);
         }
     }
 
@@ -961,6 +1066,10 @@ impl<'a> RubyOperationBuilder<'a> {
         if promotable {
             flags |= DefinitionFlags::PROMOTABLE;
         }
+        // Only `||=` writes also reference the constant
+        if also_add_reference {
+            flags |= DefinitionFlags::CONDITIONAL;
+        }
         self.operations.push(Operation::DefineConstant(op::DefineConstant {
             name_id,
             uri_id: self.uri_id,
@@ -1021,7 +1130,11 @@ impl<'a> RubyOperationBuilder<'a> {
         };
 
         let offset = Offset::from_prism_location(&location);
-        let (comments, flags) = self.find_comments_for(offset.start());
+        let (comments, mut flags) = self.find_comments_for(offset.start());
+        // Only `||=` writes also reference the constant
+        if also_add_reference {
+            flags |= DefinitionFlags::CONDITIONAL;
+        }
 
         self.operations.push(Operation::AliasConstant(op::AliasConstant {
             name_id,
@@ -1419,6 +1532,12 @@ impl CommentGroup {
 // -- Visit implementation --
 
 impl Visit<'_> for RubyOperationBuilder<'_> {
+    fn visit_block_node(&mut self, node: &ruby_prism::BlockNode) {
+        self.block_depth += 1;
+        ruby_prism::visit_block_node(self, node);
+        self.block_depth -= 1;
+    }
+
     fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'_>) {
         self.handle_class_definition(
             &node.location(),
@@ -1500,12 +1619,14 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
             name_id,
             is_module: false,
         });
+        self.namespace_block_depths.push(self.block_depth);
         self.visibility_stack
             .push(VisibilityModifier::new(Visibility::Public, false, offset));
         if let Some(body) = node.body() {
             self.visit(&body);
         }
         self.visibility_stack.pop();
+        self.namespace_block_depths.pop();
         self.nesting_stack.pop();
         self.operations.push(Operation::ExitScope);
     }

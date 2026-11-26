@@ -220,6 +220,19 @@ rules! {
     /// end
     /// ```
     UndefinedConstantVisibilityTarget => Warning,
+    /// A private constant referenced through a constant path. `private_constant` only allows unqualified references
+    /// (from the lexical scope or through inheritance), so this raises `NameError` at runtime.
+    ///
+    /// ```ruby
+    /// class Foo
+    ///   BAR = 1
+    ///   private_constant :BAR
+    /// end
+    ///
+    /// Foo::BAR
+    ///      ^^^ Private constant `Foo::BAR` referenced with a constant path.
+    /// ```
+    PrivateConstantReference => Warning,
 }
 
 impl std::fmt::Display for Rule {
