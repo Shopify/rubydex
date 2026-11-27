@@ -200,6 +200,11 @@ like Claude to semantically query your Ruby codebase.
    the project at startup and provides semantic code intelligence tools through
    the tools below.
 
+   If a tool call arrives while indexing is still running, clients can include
+   a progress token in the request metadata to receive indexing updates and wait
+   for the tool result. Calls without a progress token keep the existing
+   immediate indexing response.
+
 #### Available MCP Tools
 
 | Tool | Description |
