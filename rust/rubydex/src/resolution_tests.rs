@@ -9,7 +9,7 @@ use crate::{
     assert_diagnostics_eq, assert_instance_variables_eq, assert_members_eq, assert_no_constant_alias_target,
     assert_no_diagnostics, assert_no_members, assert_owner_eq, assert_singleton_class_eq,
     diagnostic::{Rule, Severity},
-    model::{declaration::Ancestors, ids::DeclarationId, name::NameRef},
+    model::{declaration::Ancestors, definitions::Definition, ids::DeclarationId, name::NameRef},
     test_utils::GraphTest,
 };
 
@@ -980,6 +980,376 @@ mod constant_alias_tests {
 
 mod superclass_tests {
     use super::*;
+
+    #[test]
+    fn namesake_superclass_keeps_enclosing_module_ancestors() {
+        let mut context = graph_test();
+        context.index_uri("file:///outer.rb", "class A; end; module M; class A; end; end");
+        context.index_uri("file:///inner.rb", "module G; include M; class A < A; end; end");
+        context.resolve();
+        assert_eq!(resolved_superclass_name(&context, "G::A"), "M::A");
+    }
+
+    #[test]
+    fn namesake_superclass_ignores_later_same_file_reopening() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///a.rb",
+            "class A; end; module G; class A < A; end; class A; end; end",
+        );
+        context.resolve();
+        assert_eq!(resolved_superclass_name(&context, "G::A"), "A");
+    }
+
+    #[test]
+    fn namesake_superclass_keeps_outer_lexical_priority() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///a.rb",
+            "module Outer; class A; end; module M; class A; end; end; module G; include M; class A < A; end; end; end",
+        );
+        context.resolve();
+        assert_eq!(resolved_superclass_name(&context, "Outer::G::A"), "Outer::A");
+    }
+
+    #[test]
+    fn namesake_superclass_keeps_other_file_binding_in_either_order() {
+        for binding_uri in ["file:///a.rb", "file:///z.rb"] {
+            for reverse in [false, true] {
+                let mut context = graph_test();
+                let binding = (binding_uri, "class A; end; module G; class A; end; end");
+                let header = ("file:///m.rb", "module G; class A < A; end; end");
+                for (uri, source) in if reverse { [header, binding] } else { [binding, header] } {
+                    context.index_uri(uri, source);
+                }
+                context.resolve();
+                assert_eq!(resolved_superclass_name(&context, "G::A"), "G::A");
+            }
+        }
+    }
+
+    #[test]
+    fn namesake_superclass_rechecks_added_and_removed_binding() {
+        let mut context = graph_test();
+        context.index_uri("file:///outer.rb", "class A; end; module M; class A; end; end");
+        context.index_uri("file:///header.rb", "module G; include M; class A < A; end; end");
+        context.resolve();
+        assert_eq!(resolved_superclass_name(&context, "G::A"), "M::A");
+        for _ in 0..2 {
+            context.index_uri("file:///binding.rb", "module G; class A; end; end");
+            context.resolve();
+            assert_eq!(resolved_superclass_name(&context, "G::A"), "G::A");
+            context.delete_uri("file:///binding.rb");
+            context.resolve();
+            assert_eq!(resolved_superclass_name(&context, "G::A"), "M::A");
+        }
+    }
+
+    #[test]
+    fn namesake_superclass_rechecks_changed_ancestors() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///outer.rb",
+            "class A; end; module M; class A; end; end; module N; class A; end; end",
+        );
+        context.index_uri("file:///header.rb", "module G; class A < A; end; end");
+        for (source, expected) in [
+            ("module G; include M; end", "M::A"),
+            ("module G; include N; end", "N::A"),
+            ("module G; end", "A"),
+        ] {
+            context.index_uri("file:///mixin.rb", source);
+            context.resolve();
+            assert_eq!(resolved_superclass_name(&context, "G::A"), expected);
+        }
+    }
+
+    #[test]
+    fn namesake_superclass_rechecks_qualified_binding() {
+        let mut context = graph_test();
+        context.index_uri("file:///outer.rb", "class A; end");
+        context.index_uri("file:///header.rb", "module G; class A < A; end; end");
+        context.resolve();
+        assert_eq!(resolved_superclass_name(&context, "G::A"), "A");
+        context.index_uri("file:///binding.rb", "class G::A; end");
+        context.resolve();
+        assert_eq!(resolved_superclass_name(&context, "G::A"), "G::A");
+        context.index_uri("file:///binding.rb", "class G::B; end");
+        context.resolve();
+        assert_eq!(resolved_superclass_name(&context, "G::A"), "A");
+        context.delete_uri("file:///binding.rb");
+        context.resolve();
+        assert_eq!(resolved_superclass_name(&context, "G::A"), "A");
+    }
+
+    #[test]
+    fn namesake_superclass_rechecks_ancestor_alias_target() {
+        let mut context = graph_test();
+        context.index_uri("file:///outer.rb", "class A; end; class Base; end; class Other; end");
+        context.index_uri("file:///header.rb", "module G; include M; class A < A; end; end");
+        for target in ["Base", "Other", "Base"] {
+            context.index_uri("file:///alias.rb", &format!("module M; A = ::{target}; end"));
+            context.resolve();
+            assert_eq!(resolved_superclass_name(&context, "G::A"), "M::A");
+            assert_ancestors_eq!(context, "G::A", ["G::A", target, "Object", "Kernel", "BasicObject"]);
+        }
+    }
+
+    #[test]
+    fn namesake_superclass_context_is_removed_with_header() {
+        use crate::model::graph::NameDependent;
+        let mut context = graph_test();
+        context.index_uri("file:///outer.rb", "class A; end; module G; end");
+        for _ in 0..2 {
+            context.index_uri("file:///header.rb", "module G; class A < A; end; end");
+            context.resolve();
+            assert_eq!(resolved_superclass_name(&context, "G::A"), "A");
+            let ids: Vec<_> = context
+                .graph()
+                .name_dependents()
+                .values()
+                .flatten()
+                .filter_map(|edge| {
+                    if let NameDependent::SuperclassName(id) = edge {
+                        Some(*id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(ids.len(), 1);
+            context.delete_uri("file:///header.rb");
+            context.resolve();
+            assert!(ids.iter().all(|id| !context.graph().names().contains_key(id)));
+            assert!(
+                !context
+                    .graph()
+                    .name_dependents()
+                    .values()
+                    .flatten()
+                    .any(|edge| matches!(edge, NameDependent::SuperclassName(_)))
+            );
+        }
+    }
+
+    #[test]
+    fn namesake_superclass_without_prior_top_level_binding_is_unresolved() {
+        let mut context = graph_test();
+        context.index_uri("file:///header.rb", "class A < A; end");
+        context.resolve();
+        let graph = context.graph();
+        let references: Vec<_> = graph
+            .constant_references()
+            .values()
+            .filter(|reference| match graph.names().get(reference.name_id()).unwrap() {
+                NameRef::Unresolved(name) => name.superclass_context().is_some(),
+                NameRef::Resolved(name) => name.name().superclass_context().is_some(),
+            })
+            .collect();
+        assert_eq!(references.len(), 1);
+        assert!(matches!(
+            graph.names().get(references[0].name_id()),
+            Some(NameRef::Unresolved(_))
+        ));
+    }
+
+    #[test]
+    fn namesake_superclass_retries_an_initially_missing_mixin() {
+        let mut context = graph_test();
+        context.index_uri("file:///outer.rb", "class A; end");
+        context.index_uri("file:///header.rb", "module G; include M; class A < A; end; end");
+        context.resolve();
+        context.index_uri("file:///mixin.rb", "module M; class A; end; end");
+        context.resolve();
+        assert_eq!(resolved_superclass_name(&context, "G::A"), "M::A");
+    }
+
+    #[test]
+    fn namesake_superclass_keeps_cross_file_alias_binding() {
+        for binding_uri in ["file:///a.rb", "file:///z.rb"] {
+            let mut context = graph_test();
+            context.index_uri("file:///base.rb", "class Base; end");
+            context.index_uri(binding_uri, "module G; A = ::Base; end");
+            context.index_uri("file:///m.rb", "module G; class A < A; end; end");
+            context.resolve();
+            assert_eq!(resolved_superclass_name(&context, "G::A"), "G::A");
+        }
+    }
+
+    #[test]
+    fn namesake_superclass_headers_have_independent_visibility() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///header.rb",
+            "class A; end; module G; class A < A; end; class A < A; end; end",
+        );
+        context.resolve();
+        let graph = context.graph();
+        let mut targets: Vec<_> = graph
+            .constant_references()
+            .values()
+            .filter_map(|reference| {
+                let NameRef::Resolved(name) = graph.names().get(reference.name_id()).unwrap() else {
+                    return None;
+                };
+                name.name().superclass_context().map(|_| {
+                    (
+                        reference.offset().start(),
+                        graph
+                            .declarations()
+                            .get(name.declaration_id())
+                            .unwrap()
+                            .name()
+                            .to_string(),
+                    )
+                })
+            })
+            .collect();
+        targets.sort_by_key(|(offset, _)| *offset);
+        assert_eq!(
+            targets.into_iter().map(|(_, name)| name).collect::<Vec<_>>(),
+            ["A", "G::A"]
+        );
+    }
+
+    fn resolved_superclass_name(context: &GraphTest, class_name: &str) -> String {
+        let graph = context.graph();
+        let declaration = graph.declarations().get(&DeclarationId::from(class_name)).unwrap();
+        let class = declaration
+            .definitions()
+            .iter()
+            .find_map(|id| match graph.definitions().get(id).unwrap() {
+                Definition::Class(class) if class.superclass_ref().is_some() => Some(class),
+                _ => None,
+            })
+            .unwrap();
+        let reference = graph
+            .constant_references()
+            .get(class.superclass_ref().unwrap())
+            .unwrap();
+        let NameRef::Resolved(superclass) = graph.names().get(reference.name_id()).unwrap() else {
+            panic!("superclass reference should resolve");
+        };
+
+        graph
+            .declarations()
+            .get(superclass.declaration_id())
+            .unwrap()
+            .name()
+            .to_string()
+    }
+
+    #[test]
+    fn resolves_namesake_superclass_from_outer_lexical_scope() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class ApplicationRecord; end
+
+            module GSD
+              class ApplicationRecord < ApplicationRecord; end
+              ApplicationRecord
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        let graph = context.graph();
+        assert_eq!(
+            resolved_superclass_name(&context, "GSD::ApplicationRecord"),
+            "ApplicationRecord"
+        );
+
+        let mut reference_targets: Vec<_> = graph
+            .constant_references()
+            .values()
+            .filter_map(|reference| {
+                let NameRef::Resolved(name) = graph.names().get(reference.name_id()).unwrap() else {
+                    return None;
+                };
+                (graph.strings().get(name.name().str()).unwrap().as_str() == "ApplicationRecord").then(|| {
+                    (
+                        reference.offset().start(),
+                        graph
+                            .declarations()
+                            .get(name.declaration_id())
+                            .unwrap()
+                            .name()
+                            .to_string(),
+                    )
+                })
+            })
+            .collect();
+        reference_targets.sort_by_key(|(offset, _)| *offset);
+        assert_eq!(
+            reference_targets
+                .into_iter()
+                .map(|(_, target)| target)
+                .collect::<Vec<_>>(),
+            ["ApplicationRecord", "GSD::ApplicationRecord"]
+        );
+    }
+
+    #[test]
+    fn resolves_namesake_superclass_from_enclosing_lexical_scope() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Outer
+              class ApplicationRecord; end
+
+              module GSD
+                class ApplicationRecord < ApplicationRecord; end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_eq!(
+            resolved_superclass_name(&context, "Outer::GSD::ApplicationRecord"),
+            "Outer::ApplicationRecord"
+        );
+    }
+
+    #[test]
+    fn resolves_namesake_superclass_to_existing_class_in_same_lexical_scope() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module GSD
+              class ApplicationRecord; end
+              class ApplicationRecord < ApplicationRecord; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_eq!(
+            resolved_superclass_name(&context, "GSD::ApplicationRecord"),
+            "GSD::ApplicationRecord"
+        );
+    }
+
+    #[test]
+    fn resolves_namesake_superclass_to_existing_module_in_same_lexical_scope() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module GSD
+              module ApplicationRecord; end
+              class ApplicationRecord < ApplicationRecord; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_eq!(
+            resolved_superclass_name(&context, "GSD::ApplicationRecord"),
+            "GSD::ApplicationRecord"
+        );
+    }
 
     #[test]
     fn linearizing_super_classes() {

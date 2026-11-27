@@ -120,7 +120,17 @@ impl LocalGraph {
     }
 
     pub fn add_name(&mut self, str: StringId, parent_scope: ParentScope, nesting: Option<NameId>) -> NameId {
-        let name = Name::new(&self.names, str, parent_scope, nesting);
+        self.add_name_with_context(str, parent_scope, nesting, None)
+    }
+
+    pub fn add_name_with_context(
+        &mut self,
+        str: StringId,
+        parent_scope: ParentScope,
+        nesting: Option<NameId>,
+        context: Option<DefinitionId>,
+    ) -> NameId {
+        let name = Name::new(&self.names, str, parent_scope, nesting).with_superclass_context(context);
         let name_id = name.id();
 
         match self.names.entry(name_id) {
@@ -140,6 +150,12 @@ impl LocalGraph {
                         .entry(nesting_id)
                         .or_default()
                         .push(NameDependent::NestedName(name_id));
+                }
+                if name.superclass_context().is_some() {
+                    self.name_dependents
+                        .entry(name.ordinary_id())
+                        .or_default()
+                        .push(NameDependent::SuperclassName(name_id));
                 }
                 entry.insert(NameRef::Unresolved(Box::new(name)));
             }
@@ -218,6 +234,12 @@ impl LocalGraph {
         let mut name_dependents: IdentityHashMap<NameId, Vec<NameDependent>> = IdentityHashMap::default();
         for (name_id, name_ref) in &names {
             if let NameRef::Unresolved(name) = name_ref {
+                if name.superclass_context().is_some() {
+                    name_dependents
+                        .entry(name.ordinary_id())
+                        .or_default()
+                        .push(NameDependent::SuperclassName(*name_id));
+                }
                 if let Some(&parent_scope) = name.parent_scope().as_ref() {
                     name_dependents
                         .entry(parent_scope)
