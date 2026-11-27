@@ -20,6 +20,50 @@ fn graph_test() -> GraphTest {
 mod constant_resolution_tests {
     use super::*;
 
+    fn nested_in_superclass(explicit_namespace: bool, superclass: &str) -> GraphTest {
+        let mut context = graph_test();
+        context.index_uri("file:///record.rb", "class Record\n  LIMIT = 4\nend\n");
+        if explicit_namespace {
+            context.index_uri("file:///outer.rb", "module Outer\nend\n");
+        }
+        context.index_uri("file:///base.rb", "class Outer::Base\nend\n");
+        context.index_uri("file:///other.rb", "class Outer::Other\nend\n");
+        context.index_uri(
+            "file:///child.rb",
+            &format!("class Outer::Base::Child < {superclass}\n  def limit\n    Record::LIMIT\n  end\nend\n"),
+        );
+        context.resolve();
+        context
+    }
+
+    #[test]
+    fn resolves_top_level_constant_in_class_nested_under_its_superclass_with_implicit_namespace() {
+        let context = nested_in_superclass(false, "Outer::Base");
+        assert_ancestors_eq!(
+            context,
+            "Outer::Base",
+            ["Outer::Base", "Object", "Kernel", "BasicObject"]
+        );
+        assert_ancestors_eq!(
+            context,
+            "Outer::Base::Child",
+            ["Outer::Base::Child", "Outer::Base", "Object", "Kernel", "BasicObject"]
+        );
+        assert_constant_reference_to!(context, "Record", "file:///child.rb:3:5-3:11");
+    }
+
+    #[test]
+    fn resolves_top_level_constant_in_class_nested_under_its_superclass_with_explicit_namespace() {
+        let context = nested_in_superclass(true, "Outer::Base");
+        assert_constant_reference_to!(context, "Record", "file:///child.rb:3:5-3:11");
+    }
+
+    #[test]
+    fn resolves_top_level_constant_in_class_nested_under_sibling_superclass() {
+        let context = nested_in_superclass(false, "Outer::Other");
+        assert_constant_reference_to!(context, "Record", "file:///child.rb:3:5-3:11");
+    }
+
     #[test]
     fn resolving_top_level_references() {
         let mut context = graph_test();

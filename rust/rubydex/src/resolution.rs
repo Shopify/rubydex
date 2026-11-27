@@ -315,6 +315,39 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// Adds work created during resolution without duplicating units that are already queued for retry.
+    fn extend_unique_units(&mut self, units: impl IntoIterator<Item = Unit>) {
+        let mut definitions = IdentityHashSet::default();
+        let mut references = IdentityHashSet::default();
+        let mut ancestors = IdentityHashSet::default();
+
+        for unit in &self.unit_queue {
+            match unit {
+                Unit::Definition(id) => {
+                    definitions.insert(*id);
+                }
+                Unit::ConstantRef(id) => {
+                    references.insert(*id);
+                }
+                Unit::Ancestors(id) => {
+                    ancestors.insert(*id);
+                }
+            }
+        }
+
+        for unit in units {
+            let is_new = match &unit {
+                Unit::Definition(id) => definitions.insert(*id),
+                Unit::ConstantRef(id) => references.insert(*id),
+                Unit::Ancestors(id) => ancestors.insert(*id),
+            };
+
+            if is_new {
+                self.unit_queue.push_back(unit);
+            }
+        }
+    }
+
     /// Handle other definitions that don't require resolution, but need to have their declarations and membership created
     #[allow(clippy::too_many_lines)]
     fn handle_remaining_definitions(&mut self, other_ids: Vec<DefinitionId>) {
@@ -1311,6 +1344,15 @@ impl<'a> Resolver<'a> {
                     fully_qualified_name.insert_str(0, owner.name());
                 }
 
+                let declaration_id = DeclarationId::from(&fully_qualified_name);
+                let promotes_todo = matches!(
+                    self.graph.definitions().get(&definition_id),
+                    Some(Definition::Class(_) | Definition::Module(_) | Definition::SingletonClass(_))
+                ) && matches!(
+                    self.graph.declarations().get(&declaration_id),
+                    Some(Declaration::Namespace(Namespace::Todo(_)))
+                );
+
                 let declaration_id =
                     self.graph
                         .add_declaration(definition_id, fully_qualified_name, |fully_qualified_name| {
@@ -1332,6 +1374,10 @@ impl<'a> Resolver<'a> {
                 }
 
                 self.graph.record_resolved_name(name_id, declaration_id);
+                if promotes_todo {
+                    let work = self.graph.invalidate_descendants_and_collect_work(declaration_id);
+                    self.extend_unique_units(work);
+                }
                 Outcome::Resolved(declaration_id)
             }
             other => other,
