@@ -123,7 +123,7 @@ module Rubydex
           @graph = global_state.graph #: ::Rubydex::Graph
           @workspace_path = global_state.workspace_path #: String
           ::Rubydex::Linter::RuleLoader.load(@workspace_path)
-          @custom_rules = ::Rubydex::Linter::CustomRule.subclasses #: Array[singleton(::Rubydex::Linter::CustomRule)]
+          @custom_rules = ::Rubydex::Linter::RuleLoader.custom_rules #: Array[singleton(::Rubydex::Linter::CustomRule)]
 
           @config = ::Rubydex::Config.load(@workspace_path) #: ::Rubydex::Config
           @runner = ::Rubydex::Linter::Runner.new(@graph, custom_rules: @custom_rules, config: @config.linter) #: ::Rubydex::Linter::Runner

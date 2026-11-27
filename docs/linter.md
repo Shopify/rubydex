@@ -54,7 +54,7 @@ Rubydex ships with the base infrastructure allowing developers to create their o
 
 **IMPORTANT**: Rubydex's analysis is still being built and therefore it cannot reason about every kind of Ruby code. For example, local variables are not yet supported. Rule implementations are limited to what the graph can currently offer.
 
-Custom rules inherit from `Rubydex::Linter::CustomRule` and must define the `lint` method. All rules have access to a fully populated `Rubydex::Graph`, which can be inspected for finding possible mistakes, in addition to convenience helpers.
+Custom rules inherit from `Rubydex::Linter::CustomRule` and must provide a `lint` implementation. A rule can subclass another custom rule to share behaviour; each subclass is discovered and run as its own rule. All rules have access to a fully populated `Rubydex::Graph`, which can be inspected for finding possible mistakes, in addition to convenience helpers.
 
 Consider the following example, which is a rule to prohibit re-opening Rails models:
 ```ruby
