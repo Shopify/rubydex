@@ -84,6 +84,32 @@ pub enum Operation {
     ReferenceMethod(ReferenceMethod),
 }
 
+impl Operation {
+    pub(crate) fn comments(&self) -> &[Comment] {
+        match self {
+            Self::EnterClass(op) => &op.comments,
+            Self::EnterModule(op) => &op.comments,
+            Self::EnterSingletonClass(op) => &op.comments,
+            Self::EnterMethod(op) => &op.comments,
+            Self::AliasMethod(op) => &op.comments,
+            Self::DefineConstant(op) => &op.comments,
+            Self::AliasConstant(op) => &op.comments,
+            Self::SetConstantVisibility(op) => &op.comments,
+            Self::DefineAttribute(op) => &op.comments,
+            Self::DefineGlobalVariable(op) => &op.comments,
+            Self::DefineInstanceVariable(op) => &op.comments,
+            Self::DefineClassVariable(op) => &op.comments,
+            Self::AliasGlobalVariable(op) => &op.comments,
+            Self::ExitScope
+            | Self::SetMethodVisibility(_)
+            | Self::SetDefaultVisibility(_)
+            | Self::Mixin(_)
+            | Self::ReferenceConstant(_)
+            | Self::ReferenceMethod(_) => &[],
+        }
+    }
+}
+
 /// A resolved target as it appears in source code.
 ///
 /// Used for method receivers (`def self.foo`), mixin targets (`include Foo`),

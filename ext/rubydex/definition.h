@@ -19,6 +19,7 @@ extern VALUE cInstanceVariableDefinition;
 extern VALUE cClassVariableDefinition;
 extern VALUE cMethodAliasDefinition;
 extern VALUE cGlobalVariableAliasDefinition;
+extern VALUE cComment;
 
 void rdxi_initialize_definition(VALUE mRubydex);
 

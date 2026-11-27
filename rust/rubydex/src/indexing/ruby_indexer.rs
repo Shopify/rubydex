@@ -1,8 +1,10 @@
 //! Visit the Ruby AST and create the definitions.
 
+use std::collections::HashSet;
+
 use crate::diagnostic::Rule;
 use crate::indexing::local_graph::LocalGraph;
-use crate::model::comment::Comment;
+use crate::model::comment::{Comment, CommentGroup as DocumentCommentGroup};
 use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
     ConstantAliasDefinition, ConstantDefinition, ConstantVisibilityDefinition, Definition, DefinitionFlags,
@@ -134,6 +136,28 @@ impl<'a> RubyIndexer<'a> {
 
         self.comments = self.parse_comments_into_groups(&result);
         self.visit(&result.node());
+
+        let attached_comment_starts = self
+            .local_graph
+            .definitions()
+            .values()
+            .flat_map(Definition::comments)
+            .map(|comment| comment.offset().start())
+            .collect::<HashSet<_>>();
+
+        let comment_groups = self
+            .comments
+            .drain(..)
+            .filter(|group| {
+                group
+                    .comments
+                    .first()
+                    .is_some_and(|comment| !attached_comment_starts.contains(&comment.offset().start()))
+            })
+            .map(|group| DocumentCommentGroup::new(group.comments.into_boxed_slice()))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        self.local_graph.set_comment_groups(comment_groups);
     }
 
     fn parse_comments_into_groups(&mut self, result: &ParseResult<'_>) -> Vec<CommentGroup> {
@@ -182,6 +206,17 @@ impl<'a> RubyIndexer<'a> {
         };
 
         let group = &self.comments[idx];
+        let first_comment_offset = group.comments[0].offset().start() as usize;
+        let comment_line_start = self.source[..first_comment_offset]
+            .rfind('\n')
+            .map_or(0, |line_break| line_break + 1);
+        if !self.source.as_bytes()[comment_line_start..first_comment_offset]
+            .iter()
+            .all(|&b| b.is_ascii_whitespace())
+        {
+            return (Box::default(), DefinitionFlags::empty());
+        }
+
         let between = &self.source.as_bytes()[group.end_offset..offset_usize];
         if !between.iter().all(|&b| b.is_ascii_whitespace()) {
             return (Box::default(), DefinitionFlags::empty());

@@ -24,3 +24,22 @@ impl Comment {
         &self.string
     }
 }
+
+/// Consecutive source comments that are not attached to a definition.
+#[derive(Debug)]
+pub struct CommentGroup {
+    comments: Box<[Comment]>,
+}
+assert_mem_size!(CommentGroup, 16);
+
+impl CommentGroup {
+    #[must_use]
+    pub fn new(comments: Box<[Comment]>) -> Self {
+        Self { comments }
+    }
+
+    #[must_use]
+    pub fn comments(&self) -> &[Comment] {
+        &self.comments
+    }
+}

@@ -94,6 +94,79 @@ fn index_source(source: &str) -> LocalGraphTest {
     LocalGraphTest::new_with_backend("file:///foo.rb", source, super::backend())
 }
 
+#[test]
+fn keeps_unattached_comment_groups_on_document() {
+    let context = index_source(
+        "
+        class Foo
+          # attached to bar
+          def bar; end
+
+          #: type rel = Shop::PrivateRelation
+          #: type other = Shop::OtherRelation
+
+          # dynamic receiver comments are not attached to a definition
+          def receiver.foo; end
+
+          module Bar
+            # comment on a module_function definition
+            module_function def baz; end
+          end
+        end
+        ",
+    );
+
+    let unattached_groups = context
+        .graph()
+        .document()
+        .comments()
+        .iter()
+        .map(|group| {
+            group
+                .comments()
+                .iter()
+                .map(crate::model::comment::Comment::string)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        unattached_groups,
+        vec![
+            vec![
+                "#: type rel = Shop::PrivateRelation",
+                "#: type other = Shop::OtherRelation"
+            ],
+            vec!["# dynamic receiver comments are not attached to a definition"],
+        ]
+    );
+
+    let attached_comments = context
+        .graph()
+        .definitions()
+        .values()
+        .flat_map(Definition::comments)
+        .map(crate::model::comment::Comment::string)
+        .collect::<Vec<_>>();
+    assert!(attached_comments.contains(&"# attached to bar"));
+    assert!(attached_comments.contains(&"# comment on a module_function definition"));
+}
+
+#[test]
+fn keeps_trailing_inline_comments_unattached_to_the_next_definition() {
+    let context = index_source("def first; end # belongs to first\ndef second; end\n");
+
+    let unattached_comments = context
+        .graph()
+        .document()
+        .comments()
+        .iter()
+        .flat_map(crate::model::comment::CommentGroup::comments)
+        .map(crate::model::comment::Comment::string)
+        .collect::<Vec<_>>();
+
+    assert_eq!(unattached_comments, vec!["# belongs to first"]);
+}
+
 mod constant_tests {
     use super::*;
 

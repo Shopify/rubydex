@@ -1,6 +1,7 @@
 use std::collections::hash_map::Entry;
 
 use crate::diagnostic::{Diagnostic, Rule};
+use crate::model::comment::CommentGroup;
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::graph::NameDependent;
@@ -57,6 +58,10 @@ impl LocalGraph {
     #[must_use]
     pub fn document(&self) -> &Document {
         &self.document
+    }
+
+    pub(crate) fn set_comment_groups(&mut self, comment_groups: Box<[CommentGroup]>) {
+        self.document.set_comments(comment_groups);
     }
 
     // Definitions
