@@ -1518,6 +1518,11 @@ end
 - Lexical constant lookup still follows the surrounding constant scope, so constants created inside `class << self` do not
   become `Foo::CONST`.
 
+An explicit constant receiver such as `def Foo.baz` is resolved with the same lexical constant lookup rules as a constant
+read. Inside `Bar::Qux`, it targets `Bar::Foo` when that constant exists as the method definition runs; otherwise lookup
+continues outward. The method is installed on the receiver's singleton class. Defining `Bar::Foo` later does not retarget
+a method Ruby has already defined.
+
 ```ruby
 class Foo
   @counter = 0

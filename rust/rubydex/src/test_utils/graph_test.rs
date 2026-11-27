@@ -128,6 +128,12 @@ impl GraphTest {
                 .get(id)
                 .and_then(|d| d.name_id())
                 .and_then(|name_id| self.name_str(name_id)),
+            NameDependent::ConstantReceiverDefinition(id) => self
+                .graph()
+                .definitions()
+                .get(id)
+                .and_then(|definition| definition.constant_receiver_name_id())
+                .and_then(|name_id| self.name_str(name_id)),
             NameDependent::Reference(id) => self
                 .graph()
                 .constant_references()

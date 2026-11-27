@@ -81,6 +81,13 @@ impl LocalGraph {
                 .push(NameDependent::Definition(definition_id));
         }
 
+        if let Some(name_id) = definition.constant_receiver_name_id() {
+            self.name_dependents
+                .entry(*name_id)
+                .or_default()
+                .push(NameDependent::ConstantReceiverDefinition(definition_id));
+        }
+
         if self.definitions.insert(definition_id, definition).is_some() {
             debug_assert!(false, "DefinitionId collision in local graph");
         }

@@ -177,6 +177,20 @@ impl Definition {
         }
     }
 
+    /// Returns the constant name used as an explicit method receiver.
+    #[must_use]
+    pub fn constant_receiver_name_id(&self) -> Option<&NameId> {
+        let receiver = match self {
+            Definition::Method(method) => method.receiver().as_ref(),
+            _ => None,
+        }?;
+
+        match receiver {
+            Receiver::ConstantReceiver(name_id) => Some(name_id),
+            Receiver::SelfReceiver(_) => None,
+        }
+    }
+
     #[must_use]
     pub fn name_offset(&self) -> Option<&Offset> {
         match self {
